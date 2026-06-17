@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Script from 'next/script'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -9,7 +9,6 @@ import { CheckCircle2, ExternalLink, FileDown, Loader2, RefreshCcw, XCircle } fr
 import { useIsEmbedded } from '@/lib/useIsEmbedded'
 
 function triggerDownload(url, filename = 'KCET_Premium_Report.pdf') {
-  // Open in new tab as a download — works with Supabase public URLs.
   try {
     const a = document.createElement('a')
     a.href = url
@@ -24,13 +23,43 @@ function triggerDownload(url, filename = 'KCET_Premium_Report.pdf') {
   }
 }
 
+// Ensures the Razorpay checkout SDK is loaded.
+function loadRazorpaySdk() {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') return reject(new Error('SSR'))
+    if (window.Razorpay) return resolve()
+    const existing = document.getElementById('razorpay-checkout-js')
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error('Razorpay SDK failed to load')), { once: true })
+      return
+    }
+    const s = document.createElement('script')
+    s.id = 'razorpay-checkout-js'
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    s.async = true
+    s.onload = () => resolve()
+    s.onerror = () => reject(new Error('Razorpay SDK failed to load'))
+    document.head.appendChild(s)
+  })
+}
+
 export default function PremiumPdfButton({ input }) {
   const isEmbedded = useIsEmbedded()
   const [processing, setProcessing] = useState(false)
-  const [stage, setStage] = useState('idle') // 'idle' | 'creating' | 'checkout' | 'verifying' | 'success' | 'error' | 'embedded'
+  // 'idle' | 'embedded' | 'verifying' | 'success' | 'error'
+  // NOTE: We deliberately do NOT open our Dialog during 'creating' or
+  // 'checkout' stages. Radix Dialog applies `pointer-events:none` /
+  // `inert` / focus-trap on body-level siblings, which would break input
+  // focus inside Razorpay's checkout iframe (mobile no., OTP, etc.).
+  const [stage, setStage] = useState('idle')
   const [pdfUrl, setPdfUrl] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [open, setOpen] = useState(false)
+  const pendingErrorRef = useRef(null)
+
+  // Warm up Razorpay SDK in the background so the click handler can stay synchronous-ish.
+  useEffect(() => { loadRazorpaySdk().catch(() => {}) }, [])
 
   function openInNewTab() {
     try {
@@ -42,19 +71,21 @@ export default function PremiumPdfButton({ input }) {
   async function startPayment() {
     setErrorMsg('')
     setPdfUrl(null)
-    // If running inside the Emergent preview iframe (or any other iframe),
-    // Razorpay's mobile-number field cannot receive focus reliably. Prompt the
-    // user to continue in a top-level window before opening the checkout.
+
     if (isEmbedded) {
       setStage('embedded')
       setOpen(true)
       return
     }
+
     setProcessing(true)
-    setStage('creating')
-    setOpen(true)
+    const orderToast = toast.loading('Creating secure Razorpay order…')
+
     try {
-      // 1) Create order on server
+      // 1) Ensure SDK is ready
+      await loadRazorpaySdk()
+
+      // 2) Create order on server
       const res = await fetch('/api/payment/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -63,11 +94,14 @@ export default function PremiumPdfButton({ input }) {
       const order = await res.json()
       if (!res.ok) throw new Error(order.error || 'Failed to create payment order')
 
-      if (typeof window === 'undefined' || !window.Razorpay) {
+      if (!window.Razorpay) {
         throw new Error('Razorpay SDK not loaded yet. Please retry in a moment.')
       }
 
-      setStage('checkout')
+      toast.dismiss(orderToast)
+
+      // 3) Hand off to Razorpay. CRITICAL: our Dialog must NOT be open here,
+      // otherwise Radix' modal-mode blocks Razorpay's iframe inputs.
       const options = {
         key: order.keyId,
         amount: order.amount,
@@ -76,19 +110,33 @@ export default function PremiumPdfButton({ input }) {
         description: 'Premium College Report PDF',
         order_id: order.orderId,
         notes: { rank: String(input.rank), category: input.category, course: input.course, round: input.round },
-        prefill: { contact: '9999999999', email: 'student@kcetpredictor.in', name: 'KCET Student' },
+        prefill: { contact: '', email: '', name: '' },
         theme: { color: '#4F46E5' },
         modal: {
+          escape: true,
+          backdropclose: false,
           ondismiss: () => {
             setProcessing(false)
-            setStage('idle')
-            setOpen(false)
-            toast.message('Payment cancelled')
+            // If Razorpay reported a payment failure right before the user
+            // dismissed the modal, surface our error Dialog now. Otherwise
+            // treat it as a clean cancellation.
+            if (pendingErrorRef.current) {
+              setErrorMsg(pendingErrorRef.current)
+              setStage('error')
+              setOpen(true)
+              pendingErrorRef.current = null
+            } else {
+              setStage('idle')
+              setOpen(false)
+              toast.message('Payment cancelled')
+            }
           },
         },
         handler: async (response) => {
+          // Razorpay has closed its iframe; safe to open OUR dialog now.
+          setStage('verifying')
+          setOpen(true)
           try {
-            setStage('verifying')
             const verifyRes = await fetch('/api/payment/verify', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -118,8 +166,9 @@ export default function PremiumPdfButton({ input }) {
       const rzp = new window.Razorpay(options)
       rzp.on('payment.failed', async (resp) => {
         const desc = resp?.error?.description || 'Payment failed'
-        setErrorMsg(desc)
-        setStage('error')
+        // Stash the error; ondismiss will open our Dialog AFTER Razorpay
+        // closes — so the two never overlap.
+        pendingErrorRef.current = desc
         setProcessing(false)
         try {
           await fetch('/api/payment/record-failure', {
@@ -130,13 +179,15 @@ export default function PremiumPdfButton({ input }) {
               description: desc,
             }),
           })
-        } catch (e) {}
+        } catch (e) { /* swallow log failures */ }
         toast.error(desc)
       })
       rzp.open()
     } catch (e) {
+      toast.dismiss(orderToast)
       setErrorMsg(e.message)
       setStage('error')
+      setOpen(true)
       setProcessing(false)
       toast.error(e.message)
     }
@@ -147,10 +198,15 @@ export default function PremiumPdfButton({ input }) {
     setTimeout(() => startPayment(), 100)
   }
 
+  // Render the button OUTSIDE any Dialog/Popover/Tabs that might constrain it.
+  // We use the Radix Dialog only AFTER Razorpay closes so the two never overlap.
   return (
     <>
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
-      <Button onClick={startPayment} disabled={processing} className="gap-2">
+      {/* Backup: preload checkout.js. The script tag may double up with the JS loader
+          above; the loader short-circuits if window.Razorpay already exists. */}
+      <Script id="rzp-checkout-js" src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
+
+      <Button onClick={startPayment} disabled={processing} className="gap-2" data-rzp-trigger>
         {processing
           ? <><Loader2 className="h-4 w-4 animate-spin" /> Processing…</>
           : <><FileDown className="h-4 w-4" /> Download Premium PDF Report · ₹50</>}
@@ -163,8 +219,7 @@ export default function PremiumPdfButton({ input }) {
               {stage === 'embedded' && <span className="flex items-center gap-2 text-amber-600"><ExternalLink className="h-5 w-5" /> Open in a new tab to pay</span>}
               {stage === 'success' && <span className="flex items-center gap-2 text-emerald-600"><CheckCircle2 className="h-5 w-5" /> Payment Successful</span>}
               {stage === 'error' && <span className="flex items-center gap-2 text-red-600"><XCircle className="h-5 w-5" /> Payment Failed</span>}
-              {(stage === 'creating' || stage === 'verifying' || stage === 'checkout') &&
-                <span className="flex items-center gap-2"><Loader2 className="h-5 w-5 animate-spin" /> {stage === 'creating' ? 'Creating order…' : stage === 'verifying' ? 'Verifying payment & generating PDF…' : 'Opening checkout…'}</span>}
+              {stage === 'verifying' && <span className="flex items-center gap-2"><Loader2 className="h-5 w-5 animate-spin" /> Verifying payment & generating PDF…</span>}
             </DialogTitle>
             <DialogDescription>
               {stage === 'embedded' && (
@@ -174,8 +229,6 @@ export default function PremiumPdfButton({ input }) {
                   Click <b>Open in new tab</b> below — the app will reopen in a normal browser tab where the payment flow works without any restrictions.
                 </>
               )}
-              {stage === 'creating' && 'Setting up a secure Razorpay order for ₹50.'}
-              {stage === 'checkout' && 'Please complete the payment in the Razorpay popup.'}
               {stage === 'verifying' && 'We are verifying your payment and generating your 6-page premium report. This usually takes 5–10 seconds.'}
               {stage === 'success' && 'Your premium PDF report has been generated, uploaded securely, and the download has started.'}
               {stage === 'error' && (errorMsg || 'Something went wrong.')}
