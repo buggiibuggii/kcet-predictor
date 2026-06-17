@@ -59,7 +59,7 @@ export default function PremiumPdfButton({ input }) {
         description: 'Premium College Report PDF',
         order_id: order.orderId,
         notes: { rank: String(input.rank), category: input.category, course: input.course, round: input.round },
-        prefill: {},
+        prefill: { contact: '9999999999', email: 'student@kcetpredictor.in', name: 'KCET Student' },
         theme: { color: '#4F46E5' },
         modal: {
           ondismiss: () => {
