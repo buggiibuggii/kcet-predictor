@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Database, FileUp, RefreshCw, Sparkles, Trash2, Upload, AlertTriangle } from 'lucide-react'
+import { Database, FileUp, RefreshCw, Sparkles, Trash2, Upload, AlertTriangle, IndianRupee, CreditCard, FileText, ExternalLink } from 'lucide-react'
 
 function StatCard({ label, value, hint }) {
   return (
@@ -139,6 +139,167 @@ function DataTable({ type, refreshKey, columns }) {
   )
 }
 
+function PaymentsTable({ refreshKey }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/admin/list?type=payments&limit=200')
+        const j = await res.json()
+        if (!cancelled) setRows(j.rows || [])
+      } finally { if (!cancelled) setLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [refreshKey])
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Payments</CardTitle>
+        <CardDescription>All Razorpay payment attempts and captures.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="max-h-[500px] overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Created</TableHead>
+                <TableHead>Payment ID</TableHead>
+                <TableHead className="text-right">Amount (₹)</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && <TableRow><TableCell colSpan={4} className="py-6 text-center text-muted-foreground">Loading…</TableCell></TableRow>}
+              {!loading && rows.length === 0 && <TableRow><TableCell colSpan={4} className="py-6 text-center text-muted-foreground">No payments yet.</TableCell></TableRow>}
+              {!loading && rows.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="text-xs text-muted-foreground">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.payment_id}</TableCell>
+                  <TableCell className="text-right font-mono">{Number(r.amount).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <Badge className={
+                      (r.status || '').toLowerCase() === 'captured'
+                        ? 'bg-emerald-500 hover:bg-emerald-500'
+                        : (r.status || '').toLowerCase() === 'failed'
+                          ? 'bg-red-500 hover:bg-red-500'
+                          : 'bg-slate-500 hover:bg-slate-500'
+                    }>{r.status || 'unknown'}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function ReportsTable({ refreshKey }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/admin/list?type=reports&limit=200')
+        const j = await res.json()
+        if (!cancelled) setRows(j.rows || [])
+      } finally { if (!cancelled) setLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [refreshKey])
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Generated Reports</CardTitle>
+        <CardDescription>Premium PDFs stored in Supabase bucket “reports”.</CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="max-h-[500px] overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Created</TableHead>
+                <TableHead>Rank</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Course</TableHead>
+                <TableHead>Download</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && <TableRow><TableCell colSpan={5} className="py-6 text-center text-muted-foreground">Loading…</TableCell></TableRow>}
+              {!loading && rows.length === 0 && <TableRow><TableCell colSpan={5} className="py-6 text-center text-muted-foreground">No reports generated yet.</TableCell></TableRow>}
+              {!loading && rows.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="text-xs text-muted-foreground">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</TableCell>
+                  <TableCell className="font-mono">{r.rank}</TableCell>
+                  <TableCell>{r.category}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.course_code || '—'}</TableCell>
+                  <TableCell>
+                    {r.pdf_url ? (
+                      <a href={r.pdf_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary underline">
+                        Open <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    ) : <span className="text-xs text-muted-foreground">No URL</span>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function RevenuePanel({ refreshKey }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/admin/revenue')
+        const j = await res.json()
+        if (!cancelled) setData(j)
+      } finally { if (!cancelled) setLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [refreshKey])
+
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardDescription className="flex items-center gap-1"><IndianRupee className="h-4 w-4" /> Total Revenue</CardDescription>
+          <CardTitle className="text-3xl">₹{(data?.total_revenue ?? 0).toLocaleString()}</CardTitle>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardDescription className="flex items-center gap-1"><CreditCard className="h-4 w-4" /> Captured Payments</CardDescription>
+          <CardTitle className="text-3xl">{data?.total_captured ?? 0}</CardTitle>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardDescription className="flex items-center gap-1"><AlertTriangle className="h-4 w-4" /> Failed Attempts</CardDescription>
+          <CardTitle className="text-3xl">{data?.total_failed ?? 0}</CardTitle>
+        </CardHeader>
+      </Card>
+    </div>
+  )
+}
+
 function App() {
   const [stats, setStats] = useState({})
   const [refreshKey, setRefreshKey] = useState(0)
@@ -224,6 +385,9 @@ function App() {
           <TabsList>
             <TabsTrigger value="upload"><Upload className="mr-2 h-4 w-4" /> CSV Upload</TabsTrigger>
             <TabsTrigger value="data"><Database className="mr-2 h-4 w-4" /> Data</TabsTrigger>
+            <TabsTrigger value="revenue"><IndianRupee className="mr-2 h-4 w-4" /> Revenue</TabsTrigger>
+            <TabsTrigger value="payments"><CreditCard className="mr-2 h-4 w-4" /> Payments</TabsTrigger>
+            <TabsTrigger value="reports"><FileText className="mr-2 h-4 w-4" /> Reports</TabsTrigger>
             <TabsTrigger value="manage"><Trash2 className="mr-2 h-4 w-4" /> Manage</TabsTrigger>
           </TabsList>
 
@@ -239,6 +403,19 @@ function App() {
             <DataTable type="colleges" refreshKey={refreshKey} columns={['college_code', 'college_name', 'tier', 'city']} />
             <DataTable type="courses" refreshKey={refreshKey} columns={['code', 'course_name']} />
             <DataTable type="cutoffs" refreshKey={refreshKey} columns={['year', 'round', 'category', 'college_code', 'course_code', 'closing_rank']} />
+          </TabsContent>
+
+          <TabsContent value="revenue" className="mt-4 space-y-4">
+            <RevenuePanel refreshKey={refreshKey} />
+            <PaymentsTable refreshKey={refreshKey} />
+          </TabsContent>
+
+          <TabsContent value="payments" className="mt-4">
+            <PaymentsTable refreshKey={refreshKey} />
+          </TabsContent>
+
+          <TabsContent value="reports" className="mt-4">
+            <ReportsTable refreshKey={refreshKey} />
           </TabsContent>
 
           <TabsContent value="manage" className="mt-4">

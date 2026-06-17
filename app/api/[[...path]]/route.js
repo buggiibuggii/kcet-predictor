@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 import { getAdminClient, hasServiceRole } from '@/lib/supabaseAdmin'
-import {
-  SEED_COLLEGES,
-  SEED_COURSES,
-  CATEGORIES,
-  ROUNDS,
-  generateSeedCutoffs,
-} from '@/lib/seedData'
+import { SEED_COLLEGES, SEED_COURSES, generateSeedCutoffs, ROUNDS as DEFAULT_ROUNDS } from '@/lib/seedData'
+import { runPrediction } from '@/lib/predictor'
+import { ALL_CATEGORIES } from '@/lib/categories'
+import { getRazorpay, hasRazorpay, verifyRazorpaySignature } from '@/lib/razorpay'
+import { generateReportPdf } from '@/lib/pdfGenerator.jsx'
+
+const REPORT_PRICE_PAISE = 50 * 100 // ₹50
+const REPORTS_BUCKET = 'reports'
 
 function cors(res) {
   res.headers.set('Access-Control-Allow-Origin', process.env.CORS_ORIGINS || '*')
@@ -37,13 +38,7 @@ function requireClient() {
   return { client }
 }
 
-// ----- prediction logic -----
-function chanceFor(rank, cutoff) {
-  if (rank <= cutoff * 0.85) return 'High'
-  if (rank <= cutoff * 1.10) return 'Possible'
-  return 'Dream'
-}
-
+// ----- /api/predict -----
 async function handlePredict(request) {
   const body = await request.json().catch(() => ({}))
   const rank = Number(body.rank)
@@ -57,120 +52,30 @@ async function handlePredict(request) {
 
   const { client, error } = requireClient()
   if (error) return error
-
-  // Fetch colleges + courses to enrich
-  const [collegesRes, coursesRes] = await Promise.all([
-    client.from('colleges').select('college_code, college_name, tier, city'),
-    client.from('courses').select('code, course_name'),
-  ])
-  if (collegesRes.error) return errorResponse(collegesRes.error.message, 500)
-  if (coursesRes.error) return errorResponse(coursesRes.error.message, 500)
-
-  const collegeMap = new Map(collegesRes.data.map((c) => [c.college_code, c]))
-  const courseMap = new Map(coursesRes.data.map((c) => [c.code, c]))
-
-  // Fetch cutoffs for category + round
-  let cutoffQuery = client
-    .from('cutoffs')
-    .select('college_code, course_code, closing_rank, year, round, category')
-    .eq('category', category)
-    .eq('round', round)
-
-  const { data: cutoffs, error: cutErr } = await cutoffQuery
-  if (cutErr) return errorResponse(cutErr.message, 500)
-
-  // Section A: selected course only, sorted by tier then by chance/cutoff
-  let sectionA = []
-  if (courseCode) {
-    sectionA = cutoffs
-      .filter((c) => c.course_code === courseCode)
-      .map((c) => {
-        const college = collegeMap.get(c.college_code) || {}
-        const course = courseMap.get(c.course_code) || {}
-        return {
-          college_code: c.college_code,
-          college_name: college.college_name || c.college_code,
-          tier: college.tier || 'T?',
-          city: college.city || '',
-          course_code: c.course_code,
-          course_name: course.course_name || c.course_code,
-          closing_rank: Number(c.closing_rank),
-          chance: chanceFor(rank, Number(c.closing_rank)),
-        }
-      })
-      .filter((r) => r.chance !== 'Dream' || rank <= r.closing_rank * 1.8)
-      .sort((a, b) => {
-        const tierA = parseInt((a.tier || 'T9').replace(/\D/g, '')) || 9
-        const tierB = parseInt((b.tier || 'T9').replace(/\D/g, '')) || 9
-        if (tierA !== tierB) return tierA - tierB
-        return a.closing_rank - b.closing_rank
-      })
+  try {
+    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course: courseCode, round, includeFullSectionA: false })
+    return cors(NextResponse.json({
+      ok: true,
+      input: { rank, category, course: courseCode, round },
+      counts: { sectionA: sectionA.length, sectionB: sectionB.length },
+      sectionA,
+      sectionB,
+    }))
+  } catch (e) {
+    return errorResponse(e?.message || 'Prediction failed', 500)
   }
-
-  // Section B: aggregate ALL courses obtainable per college (High + Possible only)
-  const collegeBuckets = new Map()
-  for (const c of cutoffs) {
-    const closing = Number(c.closing_rank)
-    const chance = chanceFor(rank, closing)
-    if (chance === 'Dream') continue
-    const college = collegeMap.get(c.college_code)
-    if (!college) continue
-    if (!collegeBuckets.has(c.college_code)) {
-      collegeBuckets.set(c.college_code, {
-        college_code: c.college_code,
-        college_name: college.college_name,
-        tier: college.tier,
-        city: college.city,
-        courses: [],
-      })
-    }
-    const course = courseMap.get(c.course_code)
-    collegeBuckets.get(c.college_code).courses.push({
-      course_code: c.course_code,
-      course_name: course?.course_name || c.course_code,
-      closing_rank: closing,
-      chance,
-    })
-  }
-
-  const sectionB = Array.from(collegeBuckets.values())
-    .map((c) => {
-      // dedupe courses and keep best chance/lowest rank per course
-      const map = new Map()
-      for (const co of c.courses) {
-        const existing = map.get(co.course_code)
-        if (!existing || co.closing_rank < existing.closing_rank) map.set(co.course_code, co)
-      }
-      c.courses = Array.from(map.values()).sort((a, b) => a.closing_rank - b.closing_rank)
-      return c
-    })
-    .sort((a, b) => {
-      const tierA = parseInt((a.tier || 'T9').replace(/\D/g, '')) || 9
-      const tierB = parseInt((b.tier || 'T9').replace(/\D/g, '')) || 9
-      if (tierA !== tierB) return tierA - tierB
-      return b.courses.length - a.courses.length
-    })
-
-  return cors(NextResponse.json({
-    ok: true,
-    input: { rank, category, course: courseCode, round },
-    counts: { sectionA: sectionA.length, sectionB: sectionB.length },
-    sectionA,
-    sectionB,
-  }))
 }
 
 async function handleLookup() {
   const { client, error } = requireClient()
   if (error) return error
-
   const [coursesRes, cutoffsRes] = await Promise.all([
     client.from('courses').select('code, course_name').order('course_name'),
     client.from('cutoffs').select('category, round'),
   ])
   if (coursesRes.error) return errorResponse(coursesRes.error.message)
-  const cats = new Set(CATEGORIES)
-  const rnds = new Set(ROUNDS)
+  const cats = new Set(ALL_CATEGORIES)
+  const rnds = new Set(DEFAULT_ROUNDS)
   if (!cutoffsRes.error && cutoffsRes.data) {
     for (const c of cutoffsRes.data) {
       if (c.category) cats.add(c.category)
@@ -187,20 +92,29 @@ async function handleLookup() {
 async function handleStats() {
   const { client, error } = requireClient()
   if (error) return error
-  const [c1, c2, c3, c4, c5] = await Promise.all([
+  const [c1, c2, c3, c4, c5, p] = await Promise.all([
     client.from('colleges').select('id', { count: 'exact', head: true }),
     client.from('courses').select('code', { count: 'exact', head: true }),
     client.from('cutoffs').select('id', { count: 'exact', head: true }),
     client.from('payments').select('id', { count: 'exact', head: true }),
     client.from('reports').select('id', { count: 'exact', head: true }),
+    client.from('payments').select('amount, status'),
   ])
+  let revenue = 0
+  if (!p.error && p.data) {
+    for (const r of p.data) {
+      if ((r.status || '').toLowerCase() === 'captured') revenue += Number(r.amount) || 0
+    }
+  }
   return cors(NextResponse.json({
     colleges: c1.count || 0,
     courses: c2.count || 0,
     cutoffs: c3.count || 0,
     payments: c4.count || 0,
     reports: c5.count || 0,
+    revenue, // in INR
     has_service_role: hasServiceRole(),
+    has_razorpay: hasRazorpay(),
   }))
 }
 
@@ -211,65 +125,37 @@ async function handleList(request) {
   const { client, error } = requireClient()
   if (error) return error
 
-  if (type === 'colleges') {
-    const { data, error } = await client.from('colleges').select('*').order('college_code').limit(limit)
-    if (error) return errorResponse(error.message)
-    return cors(NextResponse.json({ rows: data }))
+  const queries = {
+    colleges: () => client.from('colleges').select('*').order('college_code').limit(limit),
+    courses: () => client.from('courses').select('*').order('code').limit(limit),
+    cutoffs: () => client.from('cutoffs').select('*').order('closing_rank').limit(limit),
+    payments: () => client.from('payments').select('*').order('created_at', { ascending: false }).limit(limit),
+    reports: () => client.from('reports').select('*').order('created_at', { ascending: false }).limit(limit),
   }
-  if (type === 'courses') {
-    const { data, error } = await client.from('courses').select('*').order('code').limit(limit)
-    if (error) return errorResponse(error.message)
-    return cors(NextResponse.json({ rows: data }))
-  }
-  if (type === 'cutoffs') {
-    const { data, error } = await client
-      .from('cutoffs')
-      .select('*')
-      .order('closing_rank', { ascending: true })
-      .limit(limit)
-    if (error) return errorResponse(error.message)
-    return cors(NextResponse.json({ rows: data }))
-  }
-  if (type === 'payments') {
-    const { data, error } = await client.from('payments').select('*').order('created_at', { ascending: false }).limit(limit)
-    if (error) return errorResponse(error.message)
-    return cors(NextResponse.json({ rows: data }))
-  }
-  if (type === 'reports') {
-    const { data, error } = await client.from('reports').select('*').order('created_at', { ascending: false }).limit(limit)
-    if (error) return errorResponse(error.message)
-    return cors(NextResponse.json({ rows: data }))
-  }
-  return errorResponse('Unknown type', 400)
+  if (!queries[type]) return errorResponse('Unknown type', 400)
+  const { data, error: err } = await queries[type]()
+  if (err) return errorResponse(err.message)
+  return cors(NextResponse.json({ rows: data }))
 }
 
 async function handleUploadCsv(request) {
   if (!hasServiceRole()) {
-    return errorResponse(
-      'SUPABASE_SERVICE_ROLE_KEY is not configured. Bulk uploads require the service role key.',
-      503
-    )
+    return errorResponse('SUPABASE_SERVICE_ROLE_KEY is not configured.', 503)
   }
   const body = await request.json().catch(() => ({}))
   const type = String(body.type || '')
   const rows = Array.isArray(body.rows) ? body.rows : []
   if (!rows.length) return errorResponse('No rows provided', 400)
-
   const { client, error } = requireClient()
   if (error) return error
 
   const cleanInt = (v) => {
     if (v === null || v === undefined || v === '') return null
-    const n = Number(v)
-    return Number.isFinite(n) ? n : null
+    const n = Number(v); return Number.isFinite(n) ? n : null
   }
-
-  let table = null
-  let conflictTarget = null
-  let mapped = []
+  let table = null, conflictTarget = null, mapped = []
   if (type === 'colleges') {
-    table = 'colleges'
-    conflictTarget = 'college_code'
+    table = 'colleges'; conflictTarget = 'college_code'
     mapped = rows.map((r) => ({
       college_code: String(r.college_code || r.code || '').trim(),
       college_name: String(r.college_name || r.name || '').trim(),
@@ -277,8 +163,7 @@ async function handleUploadCsv(request) {
       city: String(r.city || '').trim(),
     })).filter((r) => r.college_code && r.college_name)
   } else if (type === 'courses') {
-    table = 'courses'
-    conflictTarget = 'code'
+    table = 'courses'; conflictTarget = 'code'
     mapped = rows.map((r) => ({
       code: String(r.code || r.course_code || '').trim(),
       course_name: String(r.course_name || r.name || '').trim(),
@@ -296,21 +181,15 @@ async function handleUploadCsv(request) {
   } else {
     return errorResponse('Unknown type', 400)
   }
-
   if (!mapped.length) return errorResponse('No valid rows after cleaning', 400)
 
-  // batch in chunks of 500
   const chunk = 500
   let inserted = 0
   for (let i = 0; i < mapped.length; i += chunk) {
     const slice = mapped.slice(i, i + chunk)
-    let q = client.from(table)
-    let res
-    if (conflictTarget) {
-      res = await q.upsert(slice, { onConflict: conflictTarget })
-    } else {
-      res = await q.insert(slice)
-    }
+    const res = conflictTarget
+      ? await client.from(table).upsert(slice, { onConflict: conflictTarget })
+      : await client.from(table).insert(slice)
     if (res.error) return errorResponse(res.error.message, 500, { inserted })
     inserted += slice.length
   }
@@ -318,26 +197,15 @@ async function handleUploadCsv(request) {
 }
 
 async function handleSeed() {
-  if (!hasServiceRole()) {
-    return errorResponse(
-      'SUPABASE_SERVICE_ROLE_KEY is not configured. Seeding requires the service role key.',
-      503
-    )
-  }
+  if (!hasServiceRole()) return errorResponse('Service role required', 503)
   const { client, error } = requireClient()
   if (error) return error
 
-  // colleges
   const cRes = await client.from('colleges').upsert(SEED_COLLEGES, { onConflict: 'college_code' })
   if (cRes.error) return errorResponse('colleges: ' + cRes.error.message)
-
-  // courses
   const coRes = await client.from('courses').upsert(SEED_COURSES, { onConflict: 'code' })
   if (coRes.error) return errorResponse('courses: ' + coRes.error.message)
-
-  // cutoffs
   const cutoffs = generateSeedCutoffs(2024)
-  // clear existing demo cutoffs for the seed colleges/year? Easier: just insert.
   const chunk = 1000
   for (let i = 0; i < cutoffs.length; i += chunk) {
     const slice = cutoffs.slice(i, i + chunk)
@@ -346,11 +214,7 @@ async function handleSeed() {
   }
   return cors(NextResponse.json({
     ok: true,
-    inserted: {
-      colleges: SEED_COLLEGES.length,
-      courses: SEED_COURSES.length,
-      cutoffs: cutoffs.length,
-    }
+    inserted: { colleges: SEED_COLLEGES.length, courses: SEED_COURSES.length, cutoffs: cutoffs.length }
   }))
 }
 
@@ -363,7 +227,6 @@ async function handleClear(request) {
   if (!['colleges', 'courses', 'cutoffs'].includes(type)) return errorResponse('Bad type', 400)
   const idCol = type === 'courses' ? 'code' : (type === 'colleges' ? 'college_code' : 'id')
   const filterVal = type === 'cutoffs' ? -1 : ''
-  // Delete-all: use neq trick
   const res = await client.from(type).delete().neq(idCol, filterVal)
   if (res.error) return errorResponse(res.error.message)
   return cors(NextResponse.json({ ok: true, cleared: type }))
@@ -395,19 +258,181 @@ async function handleUpsert(request) {
   return cors(NextResponse.json({ ok: true }))
 }
 
+// ----- /api/payment/create-order -----
+async function handleCreateOrder(request) {
+  if (!hasRazorpay()) return errorResponse('Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to environment.', 503)
+  const body = await request.json().catch(() => ({}))
+  const rank = Number(body.rank)
+  const category = String(body.category || '').trim()
+  const course = String(body.course || '').trim()
+  const round = String(body.round || '').trim()
+  if (!rank || !category || !round) return errorResponse('rank, category, round are required', 400)
+
+  const rzp = getRazorpay()
+  try {
+    const order = await rzp.orders.create({
+      amount: REPORT_PRICE_PAISE,
+      currency: 'INR',
+      receipt: `kcet_${Date.now()}`,
+      notes: { rank: String(rank), category, course, round, purpose: 'KCET Premium Report' },
+    })
+    return cors(NextResponse.json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      receipt: order.receipt,
+    }))
+  } catch (e) {
+    console.error('Razorpay order creation failed', e)
+    return errorResponse(e?.error?.description || e?.message || 'Order creation failed', 500)
+  }
+}
+
+// ----- /api/payment/verify -----
+async function handleVerifyPayment(request) {
+  if (!hasRazorpay()) return errorResponse('Razorpay not configured', 503)
+  const body = await request.json().catch(() => ({}))
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, input } = body || {}
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !input)
+    return errorResponse('Missing required fields', 400)
+
+  const ok = verifyRazorpaySignature({
+    orderId: razorpay_order_id,
+    paymentId: razorpay_payment_id,
+    signature: razorpay_signature,
+  })
+  if (!ok) return errorResponse('Signature verification failed', 400)
+
+  const rank = Number(input.rank)
+  const category = String(input.category || '').trim()
+  const course = String(input.course || '').trim()
+  const round = String(input.round || '').trim()
+  if (!rank || !category || !round) return errorResponse('Invalid input metadata', 400)
+
+  const { client, error } = requireClient()
+  if (error) return error
+
+  try {
+    // Run full prediction (includeFullSectionA=true so we capture Dream too)
+    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course, round, includeFullSectionA: true })
+
+    // Lookup the course name for the cover page
+    let courseName = course
+    if (course) {
+      const { data: cr } = await client.from('courses').select('course_name').eq('code', course).maybeSingle()
+      if (cr?.course_name) courseName = cr.course_name
+    }
+
+    // Generate PDF
+    const pdfBuffer = await generateReportPdf({
+      input: { rank, category, course, round, course_name: courseName },
+      sectionA,
+      sectionB,
+    })
+
+    // Upload to Supabase Storage
+    const ts = Date.now()
+    const path = `reports/kcet_${rank}_${category}_${course || 'all'}_${round}_${ts}.pdf`
+    const { error: upErr } = await client.storage
+      .from(REPORTS_BUCKET)
+      .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true })
+    if (upErr) {
+      console.error('Storage upload error', upErr)
+      // still try to record the payment as failed-storage
+      await client.from('payments').insert({
+        payment_id: razorpay_payment_id,
+        amount: REPORT_PRICE_PAISE / 100,
+        status: 'captured_no_pdf',
+      })
+      return errorResponse('PDF upload failed: ' + upErr.message, 500)
+    }
+    const { data: pub } = client.storage.from(REPORTS_BUCKET).getPublicUrl(path)
+    const pdfUrl = pub?.publicUrl || null
+
+    // Insert payment record
+    const { error: payErr } = await client.from('payments').insert({
+      payment_id: razorpay_payment_id,
+      amount: REPORT_PRICE_PAISE / 100,
+      status: 'captured',
+    })
+    if (payErr) console.error('Payment insert error', payErr)
+
+    // Insert report record
+    const { data: rep, error: repErr } = await client.from('reports').insert({
+      rank,
+      category,
+      course_code: course || null,
+      pdf_url: pdfUrl,
+    }).select().single()
+    if (repErr) console.error('Report insert error', repErr)
+
+    return cors(NextResponse.json({
+      ok: true,
+      pdfUrl,
+      reportId: rep?.id ?? null,
+      paymentId: razorpay_payment_id,
+    }))
+  } catch (e) {
+    console.error('verify-payment error', e)
+    return errorResponse(e?.message || 'Verification flow failed', 500)
+  }
+}
+
+// ----- /api/payment/record-failure -----
+async function handleRecordFailure(request) {
+  const body = await request.json().catch(() => ({}))
+  const { razorpay_payment_id, description } = body || {}
+  const { client, error } = requireClient()
+  if (error) return error
+  await client.from('payments').insert({
+    payment_id: razorpay_payment_id || `failed_${Date.now()}`,
+    amount: REPORT_PRICE_PAISE / 100,
+    status: 'failed',
+  })
+  return cors(NextResponse.json({ ok: true }))
+}
+
+// ----- /api/admin/revenue -----
+async function handleRevenue() {
+  const { client, error } = requireClient()
+  if (error) return error
+  const { data, error: err } = await client
+    .from('payments')
+    .select('id, payment_id, amount, status, created_at')
+    .order('created_at', { ascending: false })
+    .limit(500)
+  if (err) return errorResponse(err.message)
+  const rows = data || []
+  const captured = rows.filter((r) => (r.status || '').toLowerCase() === 'captured')
+  const totalRevenue = captured.reduce((s, r) => s + (Number(r.amount) || 0), 0)
+  // group by day
+  const byDay = new Map()
+  for (const r of captured) {
+    const d = new Date(r.created_at)
+    const key = d.toISOString().slice(0, 10)
+    byDay.set(key, (byDay.get(key) || 0) + (Number(r.amount) || 0))
+  }
+  const trend = Array.from(byDay.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, amount]) => ({ date, amount }))
+  return cors(NextResponse.json({
+    total_revenue: totalRevenue,
+    total_captured: captured.length,
+    total_failed: rows.length - captured.length,
+    trend,
+    recent: rows.slice(0, 50),
+  }))
+}
+
 async function handleRoute(request, { params }) {
   const resolvedParams = await Promise.resolve(params)
   const path = resolvedParams?.path || []
   const route = `/${path.join('/')}`
   const method = request.method
-
   try {
-    if (route === '/' && method === 'GET') {
-      return cors(NextResponse.json({ message: 'KCET College Predictor API', ok: true }))
-    }
-    if (route === '/health' && method === 'GET') {
-      return cors(NextResponse.json({ ok: true, has_service_role: hasServiceRole() }))
-    }
+    if (route === '/' && method === 'GET') return cors(NextResponse.json({ message: 'KCET College Predictor API', ok: true }))
+    if (route === '/health' && method === 'GET') return cors(NextResponse.json({ ok: true, has_service_role: hasServiceRole(), has_razorpay: hasRazorpay() }))
     if (route === '/lookup' && method === 'GET') return handleLookup()
     if (route === '/predict' && method === 'POST') return handlePredict(request)
     if (route === '/admin/stats' && method === 'GET') return handleStats()
@@ -417,7 +442,10 @@ async function handleRoute(request, { params }) {
     if (route === '/admin/clear' && method === 'DELETE') return handleClear(request)
     if (route === '/admin/delete' && method === 'POST') return handleDelete(request)
     if (route === '/admin/upsert' && method === 'POST') return handleUpsert(request)
-
+    if (route === '/admin/revenue' && method === 'GET') return handleRevenue()
+    if (route === '/payment/create-order' && method === 'POST') return handleCreateOrder(request)
+    if (route === '/payment/verify' && method === 'POST') return handleVerifyPayment(request)
+    if (route === '/payment/record-failure' && method === 'POST') return handleRecordFailure(request)
     return errorResponse(`Route ${route} not found`, 404)
   } catch (e) {
     console.error('API error', e)

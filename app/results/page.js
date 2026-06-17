@@ -10,8 +10,9 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import PremiumPdfButton from '@/components/PremiumPdfButton'
 import { toast } from 'sonner'
-import { ArrowLeft, Download, FileDown, Loader2, MapPin, School, Sparkles } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Download, FileDown, Loader2, MapPin, School, Sparkles } from 'lucide-react'
 
 function ChanceBadge({ chance }) {
   if (chance === 'High')
@@ -107,13 +108,12 @@ function ResultsInner() {
           <p className="text-sm text-muted-foreground">
             Rank <span className="font-semibold text-foreground">{rank}</span> · Category <span className="font-semibold text-foreground">{category}</span> · Round <span className="font-semibold text-foreground">{round}</span> · Course <span className="font-semibold text-foreground">{course}</span>
           </p>
+          <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="h-4 w-4" />
+            Free prediction generated successfully.
+          </div>
         </div>
-        <Button
-          onClick={() => toast.info('Premium PDF report is coming in Phase 2 — Razorpay integration.')}
-          className="gap-2"
-        >
-          <FileDown className="h-4 w-4" /> Download Premium PDF · ₹50
-        </Button>
+        <PremiumPdfButton input={{ rank: Number(rank), category, course, round }} />
       </div>
 
       <div className="mt-6">
