@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
+import CategoryCombobox from '@/components/CategoryCombobox'
 import { toast } from 'sonner'
 import { ArrowRight, GraduationCap, Sparkles, ShieldCheck, Trophy, Zap } from 'lucide-react'
 
@@ -114,14 +115,9 @@ function App() {
 
                   <div>
                     <Label>Category</Label>
-                    <Select value={category} onValueChange={setCategory}>
-                      <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="Select category" /></SelectTrigger>
-                      <SelectContent>
-                        {categories.map((c) => (
-                          <SelectItem key={c} value={c}>{c}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="mt-1.5">
+                      <CategoryCombobox value={category} onChange={setCategory} />
+                    </div>
                   </div>
 
                   <div>
