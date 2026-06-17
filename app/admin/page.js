@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Papa from 'papaparse'
+import CsvImporter from '@/components/CsvImporter'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Button } from '@/components/ui/button'
@@ -436,10 +437,16 @@ function App() {
 
           <TabsContent value="upload" className="mt-4">
             <div className="grid gap-4 lg:grid-cols-3">
-              <CsvUploader type="colleges" sample="college_code, college_name, tier, city" onDone={() => setRefreshKey((x) => x + 1)} />
-              <CsvUploader type="courses" sample="code, course_name" onDone={() => setRefreshKey((x) => x + 1)} />
-              <CsvUploader type="cutoffs" sample="year, round, category, college_code, course_code, closing_rank" onDone={() => setRefreshKey((x) => x + 1)} />
+              <CsvImporter type="colleges" onDone={() => setRefreshKey((x) => x + 1)} />
+              <CsvImporter type="courses" onDone={() => setRefreshKey((x) => x + 1)} />
+              <CsvImporter type="cutoffs" onDone={() => setRefreshKey((x) => x + 1)} />
             </div>
+            <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
+              <CardContent className="py-3 text-xs text-muted-foreground">
+                <b>Tip:</b> For cutoffs, only <code className="font-mono">year, round, category, college_code, course_code, closing_rank</code> are required.
+                Colleges & courses you reference are auto-created. New years (2026, 2027 …) appear in the predictor dropdowns automatically.
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="data" className="mt-4 space-y-4">

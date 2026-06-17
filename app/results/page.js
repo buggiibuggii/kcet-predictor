@@ -118,6 +118,7 @@ function ResultsInner() {
   const category = sp.get('category')
   const course = sp.get('course')
   const round = sp.get('round')
+  const year = sp.get('year')
 
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState(null)
@@ -131,7 +132,7 @@ function ResultsInner() {
         const res = await fetch('/api/predict', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rank, category, course, round }),
+          body: JSON.stringify({ rank, category, course, round, year }),
         })
         const j = await res.json()
         if (!res.ok) throw new Error(j.error || 'Failed to predict')
@@ -145,7 +146,7 @@ function ResultsInner() {
     if (rank && category && round) load()
     else { setError('Missing input. Please use the home page.'); setLoading(false) }
     return () => { cancelled = true }
-  }, [rank, category, course, round])
+  }, [rank, category, course, round, year])
 
   if (loading) {
     return (
@@ -192,7 +193,7 @@ function ResultsInner() {
             Free prediction generated successfully.
           </div>
         </div>
-        <PremiumPdfButton input={{ rank: Number(rank), category, course, round }} />
+        <PremiumPdfButton input={{ rank: Number(rank), category, course, round, year: year ? Number(year) : null }} />
       </div>
 
       <div className="mt-6">

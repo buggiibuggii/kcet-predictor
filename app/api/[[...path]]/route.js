@@ -54,10 +54,10 @@ async function handlePredict(request) {
   const { client, error } = requireClient()
   if (error) return error
   try {
-    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course: courseCode, round, includeFullSectionA: false })
+    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course: courseCode, round, year: body.year, includeFullSectionA: false })
     return cors(NextResponse.json({
       ok: true,
-      input: { rank, category, course: courseCode, round },
+      input: { rank, category, course: courseCode, round, year: body.year || null },
       counts: { sectionA: sectionA.length, sectionB: sectionB.length },
       sectionA,
       sectionB,
@@ -72,21 +72,41 @@ async function handleLookup() {
   if (error) return error
   const [coursesRes, cutoffsRes] = await Promise.all([
     client.from('courses').select('code, course_name').order('course_name'),
-    client.from('cutoffs').select('category, round'),
+    // Pull live categories/rounds/years from cutoffs so the UI follows the data
+    client.from('cutoffs').select('category, round, year').limit(50000),
   ])
   if (coursesRes.error) return errorResponse(coursesRes.error.message)
-  const cats = new Set(ALL_CATEGORIES)
-  const rnds = new Set(DEFAULT_ROUNDS)
+  const cats = new Set()
+  const rnds = new Set()
+  const years = new Set()
   if (!cutoffsRes.error && cutoffsRes.data) {
     for (const c of cutoffsRes.data) {
       if (c.category) cats.add(c.category)
       if (c.round) rnds.add(c.round)
+      if (c.year != null) years.add(Number(c.year))
     }
   }
+  // Fallbacks ONLY if DB is completely empty, so the UI never breaks on a fresh install
+  if (cats.size === 0) for (const c of ALL_CATEGORIES) cats.add(c)
+  if (rnds.size === 0) for (const r of DEFAULT_ROUNDS) rnds.add(r)
+
+  const yearsSorted = Array.from(years).sort((a, b) => b - a)
+  const roundsSorted = Array.from(rnds).sort((a, b) => {
+    // Try numeric "R<x>" sort first, then alphabetical
+    const ma = /^R(\d+)$/i.exec(a), mb = /^R(\d+)$/i.exec(b)
+    if (ma && mb) return Number(ma[1]) - Number(mb[1])
+    if (ma) return -1
+    if (mb) return 1
+    return a.localeCompare(b)
+  })
+
   return cors(NextResponse.json({
     courses: coursesRes.data || [],
     categories: Array.from(cats),
-    rounds: Array.from(rnds),
+    rounds: roundsSorted,
+    years: yearsSorted,
+    latest_year: yearsSorted[0] ?? null,
+    data_driven: years.size > 0,
   }))
 }
 
@@ -146,6 +166,10 @@ async function handleUploadCsv(request) {
   const body = await request.json().catch(() => ({}))
   const type = String(body.type || '')
   const rows = Array.isArray(body.rows) ? body.rows : []
+  const mode = String(body.mode || 'append').toLowerCase() // 'append' | 'replace'
+  const isFirstChunk = body.first_chunk === true
+  const isLastChunk = body.last_chunk === true
+
   if (!rows.length) return errorResponse('No rows provided', 400)
   const { client, error } = requireClient()
   if (error) return error
@@ -154,47 +178,145 @@ async function handleUploadCsv(request) {
     if (v === null || v === undefined || v === '') return null
     const n = Number(v); return Number.isFinite(n) ? n : null
   }
-  let table = null, conflictTarget = null, mapped = []
+
+  // ------- colleges (manual upload) -------
   if (type === 'colleges') {
-    table = 'colleges'; conflictTarget = 'college_code'
-    mapped = rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       college_code: String(r.college_code || r.code || '').trim(),
-      college_name: String(r.college_name || r.name || '').trim(),
+      college_name: String(r.college_name || r.name || '').trim() || String(r.college_code || r.code || '').trim(),
       tier: String(r.tier || '').trim(),
       city: String(r.city || '').trim(),
     })).filter((r) => r.college_code && r.college_name)
-  } else if (type === 'courses') {
-    table = 'courses'; conflictTarget = 'code'
-    mapped = rows.map((r) => ({
-      code: String(r.code || r.course_code || '').trim(),
-      course_name: String(r.course_name || r.name || '').trim(),
-    })).filter((r) => r.code && r.course_name)
-  } else if (type === 'cutoffs') {
-    table = 'cutoffs'
-    mapped = rows.map((r) => ({
-      year: cleanInt(r.year) || new Date().getFullYear(),
-      round: String(r.round || '').trim(),
-      category: String(r.category || '').trim(),
-      college_code: String(r.college_code || '').trim(),
-      course_code: String(r.course_code || '').trim(),
-      closing_rank: cleanInt(r.closing_rank),
-    })).filter((r) => r.round && r.category && r.college_code && r.course_code && r.closing_rank != null)
-  } else {
-    return errorResponse('Unknown type', 400)
+    if (!mapped.length) return errorResponse('No valid rows', 400)
+    let inserted = 0
+    for (let i = 0; i < mapped.length; i += 500) {
+      const slice = mapped.slice(i, i + 500)
+      const res = await client.from('colleges').upsert(slice, { onConflict: 'college_code' })
+      if (res.error) return errorResponse(res.error.message, 500, { inserted })
+      inserted += slice.length
+    }
+    return cors(NextResponse.json({ ok: true, inserted, type }))
   }
-  if (!mapped.length) return errorResponse('No valid rows after cleaning', 400)
 
-  const chunk = 500
+  // ------- courses (manual upload) -------
+  if (type === 'courses') {
+    const mapped = rows.map((r) => ({
+      code: String(r.code || r.course_code || '').trim(),
+      course_name: String(r.course_name || r.name || '').trim() || String(r.code || r.course_code || '').trim(),
+    })).filter((r) => r.code && r.course_name)
+    if (!mapped.length) return errorResponse('No valid rows', 400)
+    let inserted = 0
+    for (let i = 0; i < mapped.length; i += 500) {
+      const slice = mapped.slice(i, i + 500)
+      const res = await client.from('courses').upsert(slice, { onConflict: 'code' })
+      if (res.error) return errorResponse(res.error.message, 500, { inserted })
+      inserted += slice.length
+    }
+    return cors(NextResponse.json({ ok: true, inserted, type }))
+  }
+
+  // ------- cutoffs (data-driven import) -------
+  if (type !== 'cutoffs') return errorResponse('Unknown type', 400)
+
+  // Replace mode: wipe cutoffs ONLY on the first chunk so subsequent chunks just append.
+  if (mode === 'replace' && isFirstChunk) {
+    const delRes = await client.from('cutoffs').delete().neq('id', -1)
+    if (delRes.error) return errorResponse('Failed to clear cutoffs: ' + delRes.error.message, 500)
+  }
+
+  // 1. Clean + validate (require year, round, category, college_code, course_code, closing_rank)
+  const seen = new Set()
+  let invalidRows = 0
+  let dupesInChunk = 0
+  const mapped = []
+  for (const r of rows) {
+    const year = cleanInt(r.year)
+    const round = String(r.round || '').trim()
+    const category = String(r.category || '').trim()
+    const college_code = String(r.college_code || '').trim()
+    const course_code = String(r.course_code || '').trim()
+    const closing_rank = cleanInt(r.closing_rank)
+    if (!year || !round || !category || !college_code || !course_code || closing_rank == null) {
+      invalidRows++
+      continue
+    }
+    const key = `${year}|${round}|${category}|${college_code}|${course_code}`
+    if (seen.has(key)) { dupesInChunk++; continue }
+    seen.add(key)
+    mapped.push({ year, round, category, college_code, course_code, closing_rank })
+  }
+  if (!mapped.length) {
+    return cors(NextResponse.json({
+      ok: true, inserted: 0, invalid: invalidRows, duplicates_in_chunk: dupesInChunk,
+      auto_created_colleges: 0, auto_created_courses: 0,
+    }))
+  }
+
+  // 2. Auto-populate missing colleges/courses (using just the codes from this chunk)
+  const uniqueColleges = Array.from(new Set(mapped.map((r) => r.college_code)))
+  const uniqueCourses = Array.from(new Set(mapped.map((r) => r.course_code)))
+
+  // Find which colleges already exist (only look up the ones we have in this chunk)
+  let existingCollegeSet = new Set()
+  if (uniqueColleges.length) {
+    const exRes = await client.from('colleges').select('college_code').in('college_code', uniqueColleges)
+    if (!exRes.error && exRes.data) existingCollegeSet = new Set(exRes.data.map((r) => r.college_code))
+  }
+  const missingColleges = uniqueColleges.filter((c) => !existingCollegeSet.has(c))
+  let autoColleges = 0
+  if (missingColleges.length) {
+    const newColleges = missingColleges.map((code) => ({ college_code: code, college_name: code, tier: '', city: '' }))
+    // upsert in chunks of 500
+    for (let i = 0; i < newColleges.length; i += 500) {
+      const slice = newColleges.slice(i, i + 500)
+      const res = await client.from('colleges').upsert(slice, { onConflict: 'college_code' })
+      if (res.error) return errorResponse('Auto-create colleges failed: ' + res.error.message, 500)
+      autoColleges += slice.length
+    }
+  }
+
+  let existingCourseSet = new Set()
+  if (uniqueCourses.length) {
+    const exRes = await client.from('courses').select('code').in('code', uniqueCourses)
+    if (!exRes.error && exRes.data) existingCourseSet = new Set(exRes.data.map((r) => r.code))
+  }
+  const missingCourses = uniqueCourses.filter((c) => !existingCourseSet.has(c))
+  let autoCourses = 0
+  if (missingCourses.length) {
+    const newCourses = missingCourses.map((code) => ({ code, course_name: code }))
+    for (let i = 0; i < newCourses.length; i += 500) {
+      const slice = newCourses.slice(i, i + 500)
+      const res = await client.from('courses').upsert(slice, { onConflict: 'code' })
+      if (res.error) return errorResponse('Auto-create courses failed: ' + res.error.message, 500)
+      autoCourses += slice.length
+    }
+  }
+
+  // 3. Insert cutoffs in chunks of 1000
   let inserted = 0
-  for (let i = 0; i < mapped.length; i += chunk) {
-    const slice = mapped.slice(i, i + chunk)
-    const res = conflictTarget
-      ? await client.from(table).upsert(slice, { onConflict: conflictTarget })
-      : await client.from(table).insert(slice)
-    if (res.error) return errorResponse(res.error.message, 500, { inserted })
+  for (let i = 0; i < mapped.length; i += 1000) {
+    const slice = mapped.slice(i, i + 1000)
+    const res = await client.from('cutoffs').insert(slice)
+    if (res.error) {
+      return errorResponse(res.error.message, 500, {
+        inserted, invalid: invalidRows, duplicates_in_chunk: dupesInChunk,
+        auto_created_colleges: autoColleges, auto_created_courses: autoCourses,
+      })
+    }
     inserted += slice.length
   }
-  return cors(NextResponse.json({ ok: true, inserted, type }))
+
+  return cors(NextResponse.json({
+    ok: true,
+    type: 'cutoffs',
+    mode,
+    inserted,
+    invalid: invalidRows,
+    duplicates_in_chunk: dupesInChunk,
+    auto_created_colleges: autoColleges,
+    auto_created_courses: autoCourses,
+    is_last_chunk: isLastChunk,
+  }))
 }
 
 async function handleSeed() {
@@ -316,7 +438,7 @@ async function handleVerifyPayment(request) {
 
   try {
     // Run full prediction (includeFullSectionA=true so we capture Dream too)
-    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course, round, includeFullSectionA: true })
+    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course, round, year: input.year, includeFullSectionA: true })
 
     // Lookup the course name for the cover page
     let courseName = course

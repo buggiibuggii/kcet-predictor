@@ -10,11 +10,25 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/utils'
 import { CATEGORY_GROUPS, findCategory, formatCategoryLabel } from '@/lib/categories'
 
-export default function CategoryCombobox({ value, onChange, className }) {
+export default function CategoryCombobox({ value, onChange, className, availableCodes }) {
   const [open, setOpen] = useState(false)
-  const selected = findCategory(value) || findCategory('GM')
+  const selected = findCategory(value) || findCategory(availableCodes?.[0] || 'GM') || { code: value, name: value, group: 'Other' }
 
-  const groups = useMemo(() => CATEGORY_GROUPS, [])
+  const groups = useMemo(() => {
+    // If availableCodes is provided, filter to only those + bucket unknowns under "Other"
+    if (!availableCodes || !availableCodes.length) return CATEGORY_GROUPS
+    const set = new Set(availableCodes)
+    const filtered = CATEGORY_GROUPS
+      .map((g) => ({ group: g.group, options: g.options.filter((o) => set.has(o.code)) }))
+      .filter((g) => g.options.length > 0)
+    // Find any codes not present in CATEGORY_GROUPS and add as "Other"
+    const known = new Set(CATEGORY_GROUPS.flatMap((g) => g.options.map((o) => o.code)))
+    const unknown = availableCodes.filter((c) => !known.has(c))
+    if (unknown.length) {
+      filtered.push({ group: 'Other', options: unknown.map((code) => ({ code, name: code })) })
+    }
+    return filtered
+  }, [availableCodes])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
