@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import PremiumPdfButton from '@/components/PremiumPdfButton'
+import EmbeddedNotice from '@/components/EmbeddedNotice'
 import { toast } from 'sonner'
 import { ArrowLeft, CheckCircle2, Download, FileDown, Loader2, MapPin, School, Sparkles } from 'lucide-react'
 
@@ -194,6 +195,10 @@ function ResultsInner() {
           </div>
         </div>
         <PremiumPdfButton input={{ rank: Number(rank), category, course, round, year: year ? Number(year) : null }} />
+      </div>
+
+      <div className="mt-6">
+        <EmbeddedNotice />
       </div>
 
       <div className="mt-6">

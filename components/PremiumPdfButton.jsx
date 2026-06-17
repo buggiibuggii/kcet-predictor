@@ -5,7 +5,8 @@ import Script from 'next/script'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { CheckCircle2, FileDown, Loader2, RefreshCcw, XCircle } from 'lucide-react'
+import { CheckCircle2, ExternalLink, FileDown, Loader2, RefreshCcw, XCircle } from 'lucide-react'
+import { useIsEmbedded } from '@/lib/useIsEmbedded'
 
 function triggerDownload(url, filename = 'KCET_Premium_Report.pdf') {
   // Open in new tab as a download — works with Supabase public URLs.
@@ -24,15 +25,31 @@ function triggerDownload(url, filename = 'KCET_Premium_Report.pdf') {
 }
 
 export default function PremiumPdfButton({ input }) {
+  const isEmbedded = useIsEmbedded()
   const [processing, setProcessing] = useState(false)
-  const [stage, setStage] = useState('idle') // 'idle' | 'creating' | 'checkout' | 'verifying' | 'success' | 'error'
+  const [stage, setStage] = useState('idle') // 'idle' | 'creating' | 'checkout' | 'verifying' | 'success' | 'error' | 'embedded'
   const [pdfUrl, setPdfUrl] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [open, setOpen] = useState(false)
 
+  function openInNewTab() {
+    try {
+      const url = typeof window !== 'undefined' ? window.location.href : '/'
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (e) { /* ignore */ }
+  }
+
   async function startPayment() {
     setErrorMsg('')
     setPdfUrl(null)
+    // If running inside the Emergent preview iframe (or any other iframe),
+    // Razorpay's mobile-number field cannot receive focus reliably. Prompt the
+    // user to continue in a top-level window before opening the checkout.
+    if (isEmbedded) {
+      setStage('embedded')
+      setOpen(true)
+      return
+    }
     setProcessing(true)
     setStage('creating')
     setOpen(true)
@@ -143,12 +160,20 @@ export default function PremiumPdfButton({ input }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
+              {stage === 'embedded' && <span className="flex items-center gap-2 text-amber-600"><ExternalLink className="h-5 w-5" /> Open in a new tab to pay</span>}
               {stage === 'success' && <span className="flex items-center gap-2 text-emerald-600"><CheckCircle2 className="h-5 w-5" /> Payment Successful</span>}
               {stage === 'error' && <span className="flex items-center gap-2 text-red-600"><XCircle className="h-5 w-5" /> Payment Failed</span>}
               {(stage === 'creating' || stage === 'verifying' || stage === 'checkout') &&
                 <span className="flex items-center gap-2"><Loader2 className="h-5 w-5 animate-spin" /> {stage === 'creating' ? 'Creating order…' : stage === 'verifying' ? 'Verifying payment & generating PDF…' : 'Opening checkout…'}</span>}
             </DialogTitle>
             <DialogDescription>
+              {stage === 'embedded' && (
+                <>
+                  You appear to be viewing this app inside an embedded preview frame. Razorpay&apos;s checkout requires a top-level window to capture the mobile-number and OTP fields reliably.
+                  <br /><br />
+                  Click <b>Open in new tab</b> below — the app will reopen in a normal browser tab where the payment flow works without any restrictions.
+                </>
+              )}
               {stage === 'creating' && 'Setting up a secure Razorpay order for ₹50.'}
               {stage === 'checkout' && 'Please complete the payment in the Razorpay popup.'}
               {stage === 'verifying' && 'We are verifying your payment and generating your 6-page premium report. This usually takes 5–10 seconds.'}
@@ -158,6 +183,14 @@ export default function PremiumPdfButton({ input }) {
           </DialogHeader>
 
           <DialogFooter className="flex-col gap-2 sm:flex-row">
+            {stage === 'embedded' && (
+              <>
+                <Button onClick={openInNewTab} className="w-full sm:w-auto">
+                  <ExternalLink className="mr-2 h-4 w-4" /> Open in new tab
+                </Button>
+                <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              </>
+            )}
             {stage === 'success' && pdfUrl && (
               <Button asChild className="w-full sm:w-auto">
                 <a href={pdfUrl} target="_blank" rel="noopener noreferrer" download>
