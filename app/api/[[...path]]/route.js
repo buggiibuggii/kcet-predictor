@@ -5,6 +5,7 @@ import { runPrediction } from '@/lib/predictor'
 import { ALL_CATEGORIES } from '@/lib/categories'
 import { getRazorpay, hasRazorpay, verifyRazorpaySignature } from '@/lib/razorpay'
 import { generateReportPdf } from '@/lib/pdfGenerator.jsx'
+import { getCurrentUser, isAdminEmail, adminWhitelistConfigured } from '@/lib/supabaseServer'
 
 const REPORT_PRICE_PAISE = 50 * 100 // ₹50
 const REPORTS_BUCKET = 'reports'
@@ -425,6 +426,25 @@ async function handleRevenue() {
   }))
 }
 
+// ----- /api/contact -----
+async function handleContact(request) {
+  const body = await request.json().catch(() => ({}))
+  const name = String(body.name || '').trim().slice(0, 120)
+  const email = String(body.email || '').trim().slice(0, 200)
+  const message = String(body.message || '').trim().slice(0, 4000)
+  if (!name || !email || !message) return errorResponse('name, email, message required', 400)
+  const { client, error } = requireClient()
+  if (error) return error
+  const { error: insErr } = await client.from('contacts').insert({ name, email, message })
+  if (insErr) {
+    // Most likely the table doesn't exist
+    const setup = 'CREATE TABLE IF NOT EXISTS contacts (\n  id BIGSERIAL PRIMARY KEY,\n  name TEXT,\n  email TEXT,\n  message TEXT,\n  created_at TIMESTAMP DEFAULT NOW()\n);'
+    console.warn('contacts insert failed', insErr.message)
+    return cors(NextResponse.json({ ok: true, stored: false, setup_hint: `Create the contacts table in Supabase:\n${setup}` }))
+  }
+  return cors(NextResponse.json({ ok: true, stored: true }))
+}
+
 async function handleRoute(request, { params }) {
   const resolvedParams = await Promise.resolve(params)
   const path = resolvedParams?.path || []
@@ -443,9 +463,18 @@ async function handleRoute(request, { params }) {
     if (route === '/admin/delete' && method === 'POST') return handleDelete(request)
     if (route === '/admin/upsert' && method === 'POST') return handleUpsert(request)
     if (route === '/admin/revenue' && method === 'GET') return handleRevenue()
+    if (route === '/admin/whoami' && method === 'GET') {
+      const u = await getCurrentUser()
+      return cors(NextResponse.json({
+        email: u?.email || null,
+        whitelist_on: adminWhitelistConfigured(),
+        is_admin: u ? isAdminEmail(u.email) : false,
+      }))
+    }
     if (route === '/payment/create-order' && method === 'POST') return handleCreateOrder(request)
     if (route === '/payment/verify' && method === 'POST') return handleVerifyPayment(request)
     if (route === '/payment/record-failure' && method === 'POST') return handleRecordFailure(request)
+    if (route === '/contact' && method === 'POST') return handleContact(request)
     return errorResponse(`Route ${route} not found`, 404)
   } catch (e) {
     console.error('API error', e)

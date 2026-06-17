@@ -50,7 +50,8 @@ const styles = StyleSheet.create({
   bulletDot: { width: 16, fontFamily: 'Helvetica-Bold', color: COLORS.primary },
 })
 
-const chanceColor = (c) => (c === 'High' ? COLORS.green : c === 'Possible' ? COLORS.amber : COLORS.slate)
+const chanceColor = (c) => ((c === 'High' || c === 'Safe') ? COLORS.green : c === 'Possible' ? COLORS.amber : COLORS.slate)
+const chanceLabel = (c) => ((c === 'High' || c === 'Safe') ? 'Safe' : c)
 
 const Header = ({ subtitle }) => (
   <View style={styles.header} fixed>
@@ -72,7 +73,7 @@ const Footer = () => (
 )
 
 const ChanceBadge = ({ chance }) => (
-  <Text style={[styles.badge, { backgroundColor: chanceColor(chance) }]}>{chance}</Text>
+  <Text style={[styles.badge, { backgroundColor: chanceColor(chance) }]}>{chanceLabel(chance)}</Text>
 )
 
 const BranchTable = ({ rows }) => {
@@ -185,7 +186,7 @@ function ReportDocument({ input, sectionA, sectionB }) {
             <Text style={styles.statValue}>{totalBranches}</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statLabel}>High Chance / Possible / Dream</Text>
+            <Text style={styles.statLabel}>Safe / Possible / Dream</Text>
             <Text style={styles.statValue}>{high.length} / {possible.length} / {dream.length}</Text>
           </View>
         </View>
@@ -193,7 +194,7 @@ function ReportDocument({ input, sectionA, sectionB }) {
         <Text style={[styles.h2, { marginTop: 22 }]}>What’s inside</Text>
         <View style={styles.bullet}><Text style={styles.bulletDot}>1.</Text><Text>Dream Colleges — a stretch but possible (Page 2)</Text></View>
         <View style={styles.bullet}><Text style={styles.bulletDot}>2.</Text><Text>Possible Colleges — realistic targets (Page 3)</Text></View>
-        <View style={styles.bullet}><Text style={styles.bulletDot}>3.</Text><Text>High Chance Colleges — strong safety net (Page 4)</Text></View>
+        <View style={styles.bullet}><Text style={styles.bulletDot}>3.</Text><Text>Safe Colleges (High Chance) — strong safety net (Page 4)</Text></View>
         <View style={styles.bullet}><Text style={styles.bulletDot}>4.</Text><Text>Top Colleges & All Obtainable Branches (Page 5)</Text></View>
         <View style={styles.bullet}><Text style={styles.bulletDot}>5.</Text><Text>Suggested KCET Option-Entry Order (Page 6)</Text></View>
 
@@ -221,11 +222,11 @@ function ReportDocument({ input, sectionA, sectionB }) {
         <Footer />
       </Page>
 
-      {/* Page 4: High Chance Colleges */}
+      {/* Page 4: Safe Colleges (High Chance) */}
       <Page size="A4" style={styles.page}>
         <Header subtitle={sub} />
-        <Text style={styles.h2}>High Chance Colleges</Text>
-        <Text style={styles.sub}>Selected course — your rank is comfortably better than these cutoffs (≤ 0.85×). Strong safety net.</Text>
+        <Text style={styles.h2}>Safe Colleges (High Chance)</Text>
+        <Text style={styles.sub}>Selected course — your rank is comfortably better than these cutoffs (≤ 0.85×). Strong safety net for option entry.</Text>
         <BranchTable rows={high} />
         <Footer />
       </Page>
@@ -244,7 +245,7 @@ function ReportDocument({ input, sectionA, sectionB }) {
         <Header subtitle={sub} />
         <Text style={styles.h2}>Suggested KCET Option-Entry Order</Text>
         <Text style={styles.sub}>
-          KEA recommends putting High-Chance options at the top, followed by Possible options, then a few Dream options at the bottom. Lock as many slots as you can.
+          KEA recommends putting Safe options (High Chance) at the top, followed by Possible options, then a few Dream options at the bottom. Lock as many slots as you can.
         </Text>
         <SuggestedOrder dream={dream} possible={possible} high={high} sectionB={sectionB} />
         <View style={styles.disclaimer}>
@@ -286,7 +287,7 @@ function SuggestedOrder({ dream, possible, high, sectionB }) {
       chance: 'Dream',
     })
   }
-  const order = { High: 0, Possible: 1, Dream: 2 }
+  const order = { High: 0, Safe: 0, Possible: 1, Dream: 2 }
   recommendations.sort((a, b) => {
     if (order[a.chance] !== order[b.chance]) return order[a.chance] - order[b.chance]
     const ta = parseInt(String(a.tier).replace(/\D/g, '')) || 9

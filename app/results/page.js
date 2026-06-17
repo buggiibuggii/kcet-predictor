@@ -15,8 +15,8 @@ import { toast } from 'sonner'
 import { ArrowLeft, CheckCircle2, Download, FileDown, Loader2, MapPin, School, Sparkles } from 'lucide-react'
 
 function ChanceBadge({ chance }) {
-  if (chance === 'High')
-    return <Badge className="bg-emerald-500 hover:bg-emerald-500">High Chance</Badge>
+  if (chance === 'High' || chance === 'Safe')
+    return <Badge className="bg-emerald-500 hover:bg-emerald-500">Safe</Badge>
   if (chance === 'Possible')
     return <Badge className="bg-amber-500 hover:bg-amber-500">Possible</Badge>
   return <Badge variant="secondary">Dream</Badge>
@@ -30,6 +30,85 @@ function TierBadge({ tier }) {
       ? 'bg-blue-500 hover:bg-blue-500'
       : 'bg-slate-500 hover:bg-slate-500'
   return <Badge className={cls}>{t || 'T?'}</Badge>
+}
+
+function OptionEntryOrder({ sectionA, sectionB }) {
+  // Combine: for each obtainable college (Section B) emit each branch as an option row.
+  // Also include Dream entries from Section A (selected course) so user sees a full picture.
+  const rows = []
+  for (const c of sectionB) {
+    for (const co of c.courses) {
+      rows.push({
+        college_name: c.college_name, college_code: c.college_code, tier: c.tier,
+        course_code: co.course_code, course_name: co.course_name,
+        closing_rank: co.closing_rank, chance: co.chance,
+      })
+    }
+  }
+  for (const r of sectionA) {
+    if (r.chance === 'Dream') {
+      rows.push({
+        college_name: r.college_name, college_code: r.college_code, tier: r.tier,
+        course_code: r.course_code, course_name: r.course_name,
+        closing_rank: r.closing_rank, chance: 'Dream',
+      })
+    }
+  }
+  const order = { High: 0, Safe: 0, Possible: 1, Dream: 2 }
+  rows.sort((a, b) => {
+    const oa = order[a.chance] ?? 9, ob = order[b.chance] ?? 9
+    if (oa !== ob) return oa - ob
+    const ta = parseInt(String(a.tier).replace(/\D/g, '')) || 9
+    const tb = parseInt(String(b.tier).replace(/\D/g, '')) || 9
+    if (ta !== tb) return ta - tb
+    return a.closing_rank - b.closing_rank
+  })
+  const limited = rows.slice(0, 80)
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Suggested KCET Option-Entry Order</CardTitle>
+        <CardDescription>
+          KEA recommends starting with Safe options (lock the safety net), then Possible, then a few Dream picks at the bottom. Use this ordering as a starting point.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12">#</TableHead>
+                <TableHead>Priority</TableHead>
+                <TableHead className="min-w-[260px]">College</TableHead>
+                <TableHead>Tier</TableHead>
+                <TableHead>Branch</TableHead>
+                <TableHead className="text-right">Cutoff</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {limited.length === 0 && <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No recommendations.</TableCell></TableRow>}
+              {limited.map((r, i) => (
+                <TableRow key={`${r.college_code}-${r.course_code}-${i}`}>
+                  <TableCell className="font-mono text-xs">{i + 1}</TableCell>
+                  <TableCell><ChanceBadge chance={r.chance} /></TableCell>
+                  <TableCell>
+                    <div className="font-medium">{r.college_name}</div>
+                    <div className="text-xs text-muted-foreground"><span className="font-mono">{r.college_code}</span></div>
+                  </TableCell>
+                  <TableCell><TierBadge tier={r.tier} /></TableCell>
+                  <TableCell>
+                    <div className="text-sm">{r.course_name}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{r.course_code}</div>
+                  </TableCell>
+                  <TableCell className="text-right font-mono">{Number(r.closing_rank).toLocaleString()}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 function ResultsInner() {
@@ -127,6 +206,9 @@ function ResultsInner() {
           </TabsTrigger>
           <TabsTrigger value="sectionB">
             <Sparkles className="mr-2 h-4 w-4" /> Section B · All Obtainable Branches ({sectionB.length})
+          </TabsTrigger>
+          <TabsTrigger value="optionOrder">
+            <FileDown className="mr-2 h-4 w-4" /> Suggested Option Order
           </TabsTrigger>
         </TabsList>
 
@@ -233,6 +315,10 @@ function ResultsInner() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="optionOrder" className="mt-4">
+          <OptionEntryOrder sectionA={sectionA} sectionB={sectionB} />
         </TabsContent>
       </Tabs>
 

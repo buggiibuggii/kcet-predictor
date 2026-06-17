@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#4F46E5"/>
+  <g fill="white">
+    <path d="M256 96 60 184l196 88 196-88-196-88zm0 32 124 56-124 56-124-56 124-56zM60 232v96l176 80c12 5 28 5 40 0l176-80v-96l-176 80c-12 5-28 5-40 0L60 232z"/>
+  </g>
+  <text x="256" y="480" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="56" text-anchor="middle" fill="white">KCET</text>
+</svg>

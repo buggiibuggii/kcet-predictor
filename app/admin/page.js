@@ -12,7 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Database, FileUp, RefreshCw, Sparkles, Trash2, Upload, AlertTriangle, IndianRupee, CreditCard, FileText, ExternalLink } from 'lucide-react'
+import { Database, FileUp, RefreshCw, Sparkles, Trash2, Upload, AlertTriangle, IndianRupee, CreditCard, FileText, ExternalLink, User as UserIcon, LogOut } from 'lucide-react'
+import { getBrowserSupabase } from '@/lib/supabaseBrowser'
+import { useRouter } from 'next/navigation'
 
 function StatCard({ label, value, hint }) {
   return (
@@ -304,15 +306,34 @@ function App() {
   const [stats, setStats] = useState({})
   const [refreshKey, setRefreshKey] = useState(0)
   const [seeding, setSeeding] = useState(false)
+  const [user, setUser] = useState(null)
+  const [whitelistOn, setWhitelistOn] = useState(false)
+  const router = useRouter()
+
+  useEffect(() => {
+    const sb = getBrowserSupabase()
+    if (!sb) return
+    sb.auth.getUser().then(({ data }) => setUser(data.user || null))
+  }, [])
 
   async function loadStats() {
     try {
       const res = await fetch('/api/admin/stats')
       const j = await res.json()
       setStats(j)
+      // Check whitelist from a safer route
+      const res2 = await fetch('/api/admin/whoami')
+      if (res2.ok) { const j2 = await res2.json(); setWhitelistOn(!!j2.whitelist_on) }
     } catch (e) { /* ignore */ }
   }
   useEffect(() => { loadStats() }, [refreshKey])
+
+  async function signOut() {
+    const sb = getBrowserSupabase()
+    if (!sb) return
+    await sb.auth.signOut()
+    router.push('/login')
+  }
 
   async function seedDemo() {
     setSeeding(true)
@@ -346,6 +367,11 @@ function App() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Admin Dashboard</h1>
             <p className="text-sm text-muted-foreground">Upload KEA cutoff CSVs, seed demo data, manage records.</p>
+            {user && (
+              <p className="mt-1 text-xs text-muted-foreground inline-flex items-center gap-1">
+                <UserIcon className="h-3 w-3" /> Signed in as <span className="font-mono">{user.email}</span>
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setRefreshKey((x) => x + 1)}>
@@ -354,8 +380,25 @@ function App() {
             <Button onClick={seedDemo} disabled={seeding}>
               <Sparkles className="mr-2 h-4 w-4" /> {seeding ? 'Seeding…' : 'Seed Demo Data'}
             </Button>
+            {user && (
+              <Button variant="outline" onClick={signOut}><LogOut className="mr-2 h-4 w-4" /> Sign out</Button>
+            )}
           </div>
         </div>
+
+        {!whitelistOn && (
+          <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
+            <CardContent className="flex items-start gap-3 py-4">
+              <AlertTriangle className="mt-0.5 h-5 w-5 text-amber-500" />
+              <div className="text-sm">
+                <div className="font-semibold">Admin whitelist not set</div>
+                <div className="text-muted-foreground">
+                  Any signed-in user can currently access this dashboard. For production, set <code className="font-mono">ADMIN_EMAILS</code> (comma-separated emails) in your environment.
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {stats.has_service_role === false && (
           <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
