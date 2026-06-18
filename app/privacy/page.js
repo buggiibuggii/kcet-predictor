@@ -2,7 +2,7 @@ import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-const CONTACT_EMAIL = 'support@kcetpredictor.com'
+const CONTACT_EMAIL = 'buggi3140@gmail.com'
 const LAST_UPDATED = 'June 2026'
 
 export const metadata = {
