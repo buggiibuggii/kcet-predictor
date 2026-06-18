@@ -4,7 +4,7 @@ import { Toaster } from '@/components/ui/sonner'
 import PWAInit from '@/components/PWAInit'
 import AdSense from '@/components/AdSense'
 
-const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://kcetpredictor.com'
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://www.kcetpredictor.in'
 
 export const metadata = {
   metadataBase: new URL(baseUrl),

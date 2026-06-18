@@ -88,7 +88,7 @@ const privacyJsonLd = {
   name: 'Privacy Policy',
   description: 'Privacy Policy for KCET College Predictor 2026.',
   inLanguage: 'en-IN',
-  isPartOf: { '@type': 'WebSite', name: 'KCET Predictor 2026', url: process.env.NEXT_PUBLIC_BASE_URL || 'https://kcetpredictor.com' },
+  isPartOf: { '@type': 'WebSite', name: 'KCET Predictor 2026', url: process.env.NEXT_PUBLIC_BASE_URL || 'https://www.kcetpredictor.in' },
   dateModified: '2026-06-15',
 }
 
