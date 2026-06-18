@@ -1,8 +1,8 @@
 import './globals.css'
+import Script from 'next/script'
 import { Providers } from './providers'
 import { Toaster } from '@/components/ui/sonner'
 import PWAInit from '@/components/PWAInit'
-import AdSense from '@/components/AdSense'
 import GoogleAnalytics from '@/components/GoogleAnalytics'
 
 const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://www.kcetpredictor.in'
@@ -86,12 +86,18 @@ export default function RootLayout({ children }) {
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }} />
       </head>
       <body className="min-h-screen bg-background text-foreground antialiased">
+        <Script
+          id="google-adsense"
+          async
+          strategy="afterInteractive"
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3790135808930134"
+          crossOrigin="anonymous"
+        />
         <Providers>
           {children}
           <Toaster richColors position="top-center" />
         </Providers>
         <PWAInit />
-        <AdSense />
         <GoogleAnalytics />
       </body>
     </html>
