@@ -23,11 +23,11 @@ function App() {
   const [category, setCategory] = useState('GM')
   const [course, setCourse] = useState('')
   const [round, setRound] = useState('')
-  const [year, setYear] = useState('')
   const [courses, setCourses] = useState([])
   const [categories, setCategories] = useState([])
   const [rounds, setRounds] = useState([])
   const [years, setYears] = useState([])
+  const [latestYear, setLatestYear] = useState(null)
   const [dataDriven, setDataDriven] = useState(false)
   const [dataReady, setDataReady] = useState(false)
 
@@ -44,17 +44,14 @@ function App() {
         }
         if (Array.isArray(data.categories) && data.categories.length) {
           setCategories(data.categories)
-          // Keep GM as default if it's in the list
           if (!data.categories.includes('GM') && data.categories[0]) setCategory(data.categories[0])
         }
         if (Array.isArray(data.rounds) && data.rounds.length) {
           setRounds(data.rounds)
           setRound(data.rounds[0])
         }
-        if (Array.isArray(data.years) && data.years.length) {
-          setYears(data.years)
-          setYear(String(data.years[0]))
-        }
+        if (Array.isArray(data.years)) setYears(data.years)
+        if (data.latest_year != null) setLatestYear(data.latest_year)
         setDataDriven(!!data.data_driven)
         setDataReady(true)
       } catch (e) { /* ignore */ }
@@ -70,8 +67,8 @@ function App() {
     if (!course) { toast.error('Please select a course'); return }
     if (!round) { toast.error('Please select a round'); return }
     setLoading(true)
+    // Year is no longer user-selectable — backend uses the latest year automatically.
     const params = new URLSearchParams({ rank: String(r), category, course, round })
-    if (year) params.set('year', year)
     router.push(`/results?${params.toString()}`)
   }
 
@@ -99,7 +96,7 @@ function App() {
                 <CardTitle className="flex items-center gap-2"><GraduationCap className="h-5 w-5 text-primary" /> Predict Your Colleges</CardTitle>
                 <CardDescription>
                   {dataDriven
-                    ? `Live cutoffs in database${years.length ? ` (years: ${years.join(', ')})` : ''}.`
+                    ? `Live cutoffs in database${latestYear ? ` — using ${latestYear} (latest)` : ''}.`
                     : 'No cutoff data yet — admin can upload KEA CSVs to power the predictor.'}
                 </CardDescription>
               </CardHeader>
@@ -124,22 +121,6 @@ function App() {
                         <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder={rounds.length ? 'Select round' : 'No rounds yet'} /></SelectTrigger>
                         <SelectContent>
                           {rounds.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <div className="mt-1.5 h-11 rounded-md border border-input bg-muted/30" />
-                    )}
-                  </div>
-
-                  <div>
-                    <Label>Year</Label>
-                    {dataReady ? (
-                      <Select key={`y-${years.length}`} value={year || undefined} onValueChange={setYear} disabled={!years.length}>
-                        <SelectTrigger className="mt-1.5 h-11">
-                          <SelectValue placeholder={years.length ? 'Select year' : 'No data yet'} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     ) : (
