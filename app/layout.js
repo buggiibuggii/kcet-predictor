@@ -3,6 +3,7 @@ import { Providers } from './providers'
 import { Toaster } from '@/components/ui/sonner'
 import PWAInit from '@/components/PWAInit'
 import AdSense from '@/components/AdSense'
+import GoogleAnalytics from '@/components/GoogleAnalytics'
 
 const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://www.kcetpredictor.in'
 
@@ -91,6 +92,7 @@ export default function RootLayout({ children }) {
         </Providers>
         <PWAInit />
         <AdSense />
+        <GoogleAnalytics />
       </body>
     </html>
   )
