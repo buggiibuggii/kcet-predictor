@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getAdminClient, hasServiceRole } from '@/lib/supabaseAdmin'
 import { SEED_COLLEGES, SEED_COURSES, generateSeedCutoffs, ROUNDS as DEFAULT_ROUNDS } from '@/lib/seedData'
-import { runPrediction } from '@/lib/predictor'
+import { runPrediction, runMultiQuotaPrediction } from '@/lib/predictor'
+import { normalizeProfile } from '@/lib/quotaEngine'
 import { ALL_CATEGORIES } from '@/lib/categories'
 import { getRazorpay, hasRazorpay, verifyRazorpaySignature } from '@/lib/razorpay'
 import { generateReportPdf } from '@/lib/pdfGenerator.jsx'
@@ -43,24 +44,39 @@ function requireClient() {
 async function handlePredict(request) {
   const body = await request.json().catch(() => ({}))
   const rank = Number(body.rank)
-  const category = String(body.category || '').trim()
   const courseCode = String(body.course || '').trim()
   const round = String(body.round || '').trim()
 
   if (!rank || rank <= 0) return errorResponse('Invalid rank', 400)
-  if (!category) return errorResponse('Category is required', 400)
   if (!round) return errorResponse('Round is required', 400)
+
+  // Accept BOTH the new payload {baseCategory, rural, kannada, special[]}
+  // AND the legacy {category} payload — normalizeProfile handles both.
+  const profile = normalizeProfile(body)
 
   const { client, error } = requireClient()
   if (error) return error
   try {
-    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course: courseCode, round, year: body.year, includeFullSectionA: false })
+    const out = await runMultiQuotaPrediction(client, {
+      rank,
+      profile,
+      course: courseCode || null,
+      round,
+      year: body.year,
+      includeAll: false,
+    })
     return cors(NextResponse.json({
       ok: true,
-      input: { rank, category, course: courseCode, round, year: body.year || null },
-      counts: { sectionA: sectionA.length, sectionB: sectionB.length },
-      sectionA,
-      sectionB,
+      input: { rank, course: courseCode, round, year: body.year || null, profile },
+      meta: out.meta,
+      counts: {
+        results: out.results.length,
+        sectionB: out.sectionB.length,
+        grouped: Object.fromEntries(Object.entries(out.grouped).map(([k, v]) => [k, v.length])),
+      },
+      results: out.results,
+      grouped: out.grouped,
+      sectionB: out.sectionB,
     }))
   } catch (e) {
     return errorResponse(e?.message || 'Prediction failed', 500)
@@ -386,18 +402,25 @@ async function handleCreateOrder(request) {
   if (!hasRazorpay()) return errorResponse('Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to environment.', 503)
   const body = await request.json().catch(() => ({}))
   const rank = Number(body.rank)
-  const category = String(body.category || '').trim()
   const course = String(body.course || '').trim()
   const round = String(body.round || '').trim()
-  if (!rank || !category || !round) return errorResponse('rank, category, round are required', 400)
+  const profile = normalizeProfile(body)
+  if (!rank || !round) return errorResponse('rank, round are required', 400)
 
+  // Build a short stable category label for receipt/notes (Razorpay caps at 15 chars).
+  const catLabel = profile.baseCategory + (profile.rural ? '+R' : '') + (profile.kannada ? '+K' : '')
   const rzp = getRazorpay()
   try {
     const order = await rzp.orders.create({
       amount: REPORT_PRICE_PAISE,
       currency: 'INR',
       receipt: `kcet_${Date.now()}`,
-      notes: { rank: String(rank), category, course, round, purpose: 'KCET Premium Report' },
+      notes: {
+        rank: String(rank),
+        category: catLabel.slice(0, 15),
+        course, round,
+        purpose: 'KCET Premium Report',
+      },
     })
     return cors(NextResponse.json({
       orderId: order.id,
@@ -428,17 +451,19 @@ async function handleVerifyPayment(request) {
   if (!ok) return errorResponse('Signature verification failed', 400)
 
   const rank = Number(input.rank)
-  const category = String(input.category || '').trim()
   const course = String(input.course || '').trim()
   const round = String(input.round || '').trim()
-  if (!rank || !category || !round) return errorResponse('Invalid input metadata', 400)
+  const profile = normalizeProfile(input)
+  if (!rank || !round) return errorResponse('Invalid input metadata', 400)
 
   const { client, error } = requireClient()
   if (error) return error
 
   try {
-    // Run full prediction (includeFullSectionA=true so we capture Dream too)
-    const { sectionA, sectionB } = await runPrediction(client, { rank, category, course, round, year: input.year, includeFullSectionA: true })
+    // Run full multi-quota prediction (includeAll=true so the PDF gets everything)
+    const out = await runMultiQuotaPrediction(client, {
+      rank, profile, course: course || null, round, year: input.year, includeAll: true,
+    })
 
     // Lookup the course name for the cover page
     let courseName = course
@@ -447,22 +472,31 @@ async function handleVerifyPayment(request) {
       if (cr?.course_name) courseName = cr.course_name
     }
 
-    // Generate PDF
+    // Generate PDF using the new multi-quota result shape
     const pdfBuffer = await generateReportPdf({
-      input: { rank, category, course, round, course_name: courseName },
-      sectionA,
-      sectionB,
+      input: {
+        rank,
+        profile,
+        profileLabel: out.meta?.profileLabel,
+        course,
+        round,
+        course_name: courseName,
+        eligibleCategories: out.meta?.eligibleCategories || [],
+      },
+      results: out.results,
+      grouped: out.grouped,
+      sectionB: out.sectionB,
     })
 
     // Upload to Supabase Storage
     const ts = Date.now()
-    const path = `reports/kcet_${rank}_${category}_${course || 'all'}_${round}_${ts}.pdf`
+    const catSafe = `${profile.baseCategory || 'GM'}${profile.rural ? 'R' : ''}${profile.kannada ? 'K' : ''}`
+    const path = `reports/kcet_${rank}_${catSafe}_${course || 'all'}_${round}_${ts}.pdf`
     const { error: upErr } = await client.storage
       .from(REPORTS_BUCKET)
       .upload(path, pdfBuffer, { contentType: 'application/pdf', upsert: true })
     if (upErr) {
       console.error('Storage upload error', upErr)
-      // still try to record the payment as failed-storage
       await client.from('payments').insert({
         payment_id: razorpay_payment_id,
         amount: REPORT_PRICE_PAISE / 100,
@@ -484,7 +518,7 @@ async function handleVerifyPayment(request) {
     // Insert report record
     const { data: rep, error: repErr } = await client.from('reports').insert({
       rank,
-      category,
+      category: catSafe,
       course_code: course || null,
       pdf_url: pdfUrl,
     }).select().single()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
@@ -9,24 +9,26 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import CategoryCombobox from '@/components/CategoryCombobox'
 import { toast } from 'sonner'
-import { ArrowRight, GraduationCap, Sparkles, ShieldCheck, Trophy, Zap } from 'lucide-react'
+import { ArrowRight, GraduationCap, Sparkles, ShieldCheck, Trophy, Zap, MapPin, Languages, Award } from 'lucide-react'
+import { BASE_CATEGORIES, SPECIAL_CATEGORIES } from '@/lib/quotaEngine'
 
 function App() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [rank, setRank] = useState('')
-  const [category, setCategory] = useState('GM')
+  const [baseCategory, setBaseCategory] = useState('GM')
+  const [rural, setRural] = useState(false)
+  const [kannada, setKannada] = useState(false)
+  const [special, setSpecial] = useState([]) // array of codes
   const [course, setCourse] = useState('')
   const [round, setRound] = useState('')
   const [courses, setCourses] = useState([])
-  const [categories, setCategories] = useState([])
   const [rounds, setRounds] = useState([])
-  const [years, setYears] = useState([])
   const [latestYear, setLatestYear] = useState(null)
   const [dataDriven, setDataDriven] = useState(false)
   const [dataReady, setDataReady] = useState(false)
@@ -42,15 +44,10 @@ function App() {
           setCourses(data.courses)
           if (data.courses.length) setCourse(data.courses[0].code)
         }
-        if (Array.isArray(data.categories) && data.categories.length) {
-          setCategories(data.categories)
-          if (!data.categories.includes('GM') && data.categories[0]) setCategory(data.categories[0])
-        }
         if (Array.isArray(data.rounds) && data.rounds.length) {
           setRounds(data.rounds)
           setRound(data.rounds[0])
         }
-        if (Array.isArray(data.years)) setYears(data.years)
         if (data.latest_year != null) setLatestYear(data.latest_year)
         setDataDriven(!!data.data_driven)
         setDataReady(true)
@@ -60,15 +57,43 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
+  // Live preview of eligible quota chain so the user understands what we'll check.
+  const eligibleChain = useMemo(() => {
+    const base = String(baseCategory || 'GM').toUpperCase()
+    const chain = []
+    if (rural) chain.push(`${base}R`)
+    if (kannada) chain.push(`${base}K`)
+    chain.push(base === 'GM' ? 'GM' : `${base}G`)
+    if (base !== 'GM') {
+      if (rural) chain.push('GMR')
+      if (kannada) chain.push('GMK')
+      chain.push('GM')
+    }
+    for (const s of special) chain.push(s)
+    return chain
+  }, [baseCategory, rural, kannada, special])
+
+  function toggleSpecial(code) {
+    setSpecial((s) => s.includes(code) ? s.filter((x) => x !== code) : [...s, code])
+  }
+
   function onPredict(e) {
     e?.preventDefault?.()
     const r = Number(rank)
     if (!r || r <= 0) { toast.error('Please enter a valid KCET rank'); return }
     if (!course) { toast.error('Please select a course'); return }
     if (!round) { toast.error('Please select a round'); return }
+    if (!baseCategory) { toast.error('Please select your category'); return }
     setLoading(true)
-    // Year is no longer user-selectable — backend uses the latest year automatically.
-    const params = new URLSearchParams({ rank: String(r), category, course, round })
+    const params = new URLSearchParams({
+      rank: String(r),
+      baseCategory,
+      rural: rural ? '1' : '0',
+      kannada: kannada ? '1' : '0',
+      special: special.join(','),
+      course,
+      round,
+    })
     router.push(`/results?${params.toString()}`)
   }
 
@@ -81,13 +106,13 @@ function App() {
           <div className="container py-16 sm:py-24">
             <div className="mx-auto max-w-3xl text-center">
               <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                <Sparkles className="h-3.5 w-3.5" /> KCET 2026 Counselling Ready
+                <Sparkles className="h-3.5 w-3.5" /> KCET 2026 Counselling Ready · Multi-Quota Engine
               </div>
               <h1 className="bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-4xl font-bold tracking-tight text-transparent sm:text-6xl">
                 Find Your Dream College in Karnataka
               </h1>
               <p className="mt-4 text-base text-muted-foreground sm:text-lg">
-                Predict your KCET college admissions instantly using real KEA cutoffs. Tier-wise sorted, all rounds, every branch.
+                Predicts via every quota you qualify for — Rural, Kannada, General &amp; Special — and shows the best chance for each college.
               </p>
             </div>
 
@@ -108,10 +133,17 @@ function App() {
                   </div>
 
                   <div>
-                    <Label>Category</Label>
-                    <div className="mt-1.5">
-                      <CategoryCombobox value={category} onChange={setCategory} availableCodes={categories} />
-                    </div>
+                    <Label>Base Category</Label>
+                    <Select value={baseCategory} onValueChange={setBaseCategory}>
+                      <SelectTrigger className="mt-1.5 h-11"><SelectValue placeholder="Select category" /></SelectTrigger>
+                      <SelectContent>
+                        {BASE_CATEGORIES.map((c) => (
+                          <SelectItem key={c.code} value={c.code}>
+                            <span className="font-mono text-xs text-muted-foreground">{c.code}</span> · {c.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div>
@@ -128,7 +160,7 @@ function App() {
                     )}
                   </div>
 
-                  <div>
+                  <div className="sm:col-span-2">
                     <Label>Course (Branch)</Label>
                     {dataReady ? (
                       <Select key={`c-${courses.length}`} value={course || undefined} onValueChange={setCourse} disabled={!courses.length}>
@@ -146,6 +178,62 @@ function App() {
                     ) : (
                       <div className="mt-1.5 h-11 rounded-md border border-input bg-muted/30" />
                     )}
+                  </div>
+
+                  {/* Eligibility flags */}
+                  <div className="sm:col-span-2 rounded-lg border border-dashed border-primary/20 bg-primary/5 p-4">
+                    <div className="mb-3 text-sm font-medium">Eligibility (tick all that apply)</div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-background p-3 hover:border-primary/40">
+                        <Checkbox checked={rural} onCheckedChange={(v) => setRural(!!v)} className="mt-0.5" />
+                        <div>
+                          <div className="flex items-center gap-1 text-sm font-medium"><MapPin className="h-3.5 w-3.5" /> Rural Quota</div>
+                          <div className="text-xs text-muted-foreground">Studied SSLC + PUC in rural Karnataka (KEA verified).</div>
+                        </div>
+                      </label>
+                      <label className="flex cursor-pointer items-start gap-2 rounded-md border bg-background p-3 hover:border-primary/40">
+                        <Checkbox checked={kannada} onCheckedChange={(v) => setKannada(!!v)} className="mt-0.5" />
+                        <div>
+                          <div className="flex items-center gap-1 text-sm font-medium"><Languages className="h-3.5 w-3.5" /> Kannada Medium</div>
+                          <div className="text-xs text-muted-foreground">Studied in Kannada-medium for at least 1 year.</div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Special categories */}
+                  <div className="sm:col-span-2 rounded-lg border border-dashed border-amber-500/30 bg-amber-500/5 p-4">
+                    <div className="mb-1 flex items-center gap-1.5 text-sm font-medium"><Award className="h-3.5 w-3.5" /> Special Quotas (optional)</div>
+                    <div className="mb-3 text-xs text-muted-foreground">Pick any quotas you have official KEA-verified eligibility for.</div>
+                    <div className="flex flex-wrap gap-2">
+                      {SPECIAL_CATEGORIES.map((s) => {
+                        const active = special.includes(s.code)
+                        return (
+                          <button
+                            type="button"
+                            key={s.code}
+                            onClick={() => toggleSpecial(s.code)}
+                            className={
+                              'rounded-full border px-3 py-1 text-xs font-medium transition ' +
+                              (active
+                                ? 'border-amber-500 bg-amber-500 text-white'
+                                : 'border-amber-500/30 bg-background text-foreground hover:bg-amber-500/10')
+                            }
+                            title={s.name}
+                          >
+                            {s.code}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Live preview of the quota chain */}
+                  <div className="sm:col-span-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                    <span className="text-muted-foreground">We will evaluate cutoffs for: </span>
+                    {eligibleChain.map((c, i) => (
+                      <span key={`${c}-${i}`} className="ml-1 inline-block rounded bg-primary/10 px-1.5 py-0.5 font-mono text-primary">{c}</span>
+                    ))}
                   </div>
 
                   <div className="sm:col-span-2 mt-2">
@@ -172,9 +260,9 @@ function App() {
 
         <section className="container py-12">
           <div className="grid gap-4 sm:grid-cols-3">
-            <Card><CardHeader><Zap className="h-6 w-6 text-primary" /><CardTitle className="text-base">Instant Predictions</CardTitle><CardDescription>Real KEA cutoffs analysed in milliseconds.</CardDescription></CardHeader></Card>
-            <Card><CardHeader><Trophy className="h-6 w-6 text-primary" /><CardTitle className="text-base">Tier-wise Sorting</CardTitle><CardDescription>Tier-1, Tier-2, Tier-3 — see the best colleges first.</CardDescription></CardHeader></Card>
-            <Card><CardHeader><ShieldCheck className="h-6 w-6 text-primary" /><CardTitle className="text-base">All Branches Covered</CardTitle><CardDescription>See every branch you can get at every college.</CardDescription></CardHeader></Card>
+            <Card><CardHeader><Zap className="h-6 w-6 text-primary" /><CardTitle className="text-base">Multi-Quota Engine</CardTitle><CardDescription>Evaluates Rural, Kannada, General &amp; GM fallback simultaneously.</CardDescription></CardHeader></Card>
+            <Card><CardHeader><Trophy className="h-6 w-6 text-primary" /><CardTitle className="text-base">5-Tier Confidence</CardTitle><CardDescription>Safe · High Chance · Borderline · Low Chance · Not Likely — no false negatives.</CardDescription></CardHeader></Card>
+            <Card><CardHeader><ShieldCheck className="h-6 w-6 text-primary" /><CardTitle className="text-base">Eligible-Via Badges</CardTitle><CardDescription>See exactly which quota qualifies you at each college.</CardDescription></CardHeader></Card>
           </div>
         </section>
       </main>

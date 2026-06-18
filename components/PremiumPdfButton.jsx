@@ -109,7 +109,7 @@ export default function PremiumPdfButton({ input }) {
         name: 'KCET Predictor 2026',
         description: 'Premium College Report PDF',
         order_id: order.orderId,
-        notes: { rank: String(input.rank), category: input.category, course: input.course, round: input.round },
+        notes: { rank: String(input.rank), course: input.course || '', round: input.round },
         prefill: { contact: '', email: '', name: '' },
         theme: { color: '#4F46E5' },
         modal: {

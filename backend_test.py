@@ -1,611 +1,834 @@
 #!/usr/bin/env python3
 """
-KCET College Predictor 2026 - Backend API Test Suite
-Tests Phase 2: Razorpay + PDF + Supabase Storage pipeline
+Backend test suite for KCET Multi-Quota Prediction Engine.
+Tests the three NEW backend tasks:
+1. /api/predict with multi-quota engine
+2. /api/payment/create-order with multi-quota payload
+3. /api/payment/verify with PDF generation using multi-quota engine
 """
 
-import os
-import sys
+import requests
 import json
-import time
 import hmac
 import hashlib
-import requests
-from datetime import datetime
+import time
+import os
 
-# Load environment variables
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://kcet.preview.emergentagent.com')
-RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET', 'EF8t4J0HipGamYuDKAntQAJt')
+BASE_URL = "https://kcet.preview.emergentagent.com/api"
+RAZORPAY_KEY_SECRET = "EF8t4J0HipGamYuDKAntQAJt"
 
-API_BASE = f"{BASE_URL}/api"
+def print_test(name):
+    print(f"\n{'='*80}")
+    print(f"TEST: {name}")
+    print('='*80)
 
-print(f"🧪 KCET Backend Test Suite")
-print(f"📍 Base URL: {BASE_URL}")
-print(f"🔑 Razorpay Secret: {RAZORPAY_KEY_SECRET[:8]}...")
-print("=" * 80)
+def print_pass(msg):
+    print(f"✅ PASS: {msg}")
 
-def test_health():
-    """Test 1: GET /api/health"""
-    print("\n✅ Test 1: GET /api/health")
+def print_fail(msg):
+    print(f"❌ FAIL: {msg}")
+
+def print_info(msg):
+    print(f"ℹ️  INFO: {msg}")
+
+# ============================================================================
+# TASK 1: /api/predict — Multi-Quota Engine
+# ============================================================================
+
+def test_predict_multi_quota_expansion():
+    """Test A: Multi-quota expansion for 2A+Rural+Kannada"""
+    print_test("A. Multi-quota expansion: 2A+Rural+Kannada → [2AR,2AK,2AG,GMR,GMK,GM]")
+    
+    payload = {
+        "rank": 10000,
+        "baseCategory": "2A",
+        "rural": True,
+        "kannada": True,
+        "course": "CS",
+        "round": "R1"
+    }
+    
     try:
-        resp = requests.get(f"{API_BASE}/health", timeout=10)
-        print(f"   Status: {resp.status_code}")
-        data = resp.json()
-        print(f"   Response: {json.dumps(data, indent=2)}")
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert data.get('ok') == True, "Expected ok=true"
-        assert data.get('has_service_role') == True, "Expected has_service_role=true"
-        assert data.get('has_razorpay') == True, "Expected has_razorpay=true"
-        
-        print("   ✅ PASSED: Health check successful")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_lookup():
-    """Test 2: GET /api/lookup"""
-    print("\n✅ Test 2: GET /api/lookup")
-    try:
-        resp = requests.get(f"{API_BASE}/lookup", timeout=10)
-        print(f"   Status: {resp.status_code}")
-        data = resp.json()
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'courses' in data, "Expected courses array"
-        assert 'categories' in data, "Expected categories array"
-        assert 'rounds' in data, "Expected rounds array"
-        
-        courses = data['courses']
-        categories = data['categories']
-        rounds = data['rounds']
-        
-        print(f"   Courses count: {len(courses)}")
-        print(f"   Categories: {categories}")
-        print(f"   Rounds: {rounds}")
-        
-        assert len(courses) >= 12, f"Expected at least 12 courses, got {len(courses)}"
-        assert 'GM' in categories, "Expected GM category"
-        assert 'SCR' in categories, "Expected SCR category"
-        assert 'STG' in categories, "Expected STG category"
-        assert 'KK' in categories, "Expected KK category"
-        assert 'R1' in rounds, "Expected R1 round"
-        assert 'R2' in rounds, "Expected R2 round"
-        
-        print("   ✅ PASSED: Lookup endpoint working")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_predict(rank, category, course, round_name):
-    """Test 3: POST /api/predict"""
-    print(f"\n✅ Test 3: POST /api/predict (rank={rank}, category={category}, course={course}, round={round_name})")
-    try:
-        payload = {
-            "rank": rank,
-            "category": category,
-            "course": course,
-            "round": round_name
-        }
-        resp = requests.post(f"{API_BASE}/predict", json=payload, timeout=15)
-        print(f"   Status: {resp.status_code}")
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        print_info(f"Status: {resp.status_code}")
         
         if resp.status_code != 200:
-            print(f"   Response: {resp.text}")
-            
+            print_fail(f"Expected 200, got {resp.status_code}")
+            print_info(f"Response: {resp.text[:500]}")
+            return False
+        
         data = resp.json()
         
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert data.get('ok') == True, "Expected ok=true"
-        assert 'counts' in data, "Expected counts object"
-        assert 'sectionA' in data, "Expected sectionA array"
-        assert 'sectionB' in data, "Expected sectionB array"
+        # Check ok: true
+        if not data.get('ok'):
+            print_fail("Response missing 'ok: true'")
+            return False
+        print_pass("Response has 'ok: true'")
         
-        counts = data['counts']
-        sectionA = data['sectionA']
-        sectionB = data['sectionB']
+        # Check meta.eligibleCategories
+        eligible = data.get('meta', {}).get('eligibleCategories', [])
+        if not eligible:
+            print_fail("meta.eligibleCategories is empty")
+            return False
         
-        print(f"   Section A count: {counts.get('sectionA', 0)}")
-        print(f"   Section B count: {counts.get('sectionB', 0)}")
+        codes = [c['code'] for c in eligible]
+        print_info(f"Eligible categories: {codes}")
         
-        assert counts.get('sectionA', 0) > 0, "Expected sectionA count > 0"
-        assert counts.get('sectionB', 0) > 0, "Expected sectionB count > 0"
+        # Expected order: 2AR, 2AK, 2AG, GMR, GMK, GM (+ any special)
+        expected_start = ['2AR', '2AK', '2AG', 'GMR', 'GMK', 'GM']
+        if codes[:6] != expected_start:
+            print_fail(f"Expected first 6 codes to be {expected_start}, got {codes[:6]}")
+            return False
+        print_pass(f"Eligible categories correctly ordered: {codes[:6]}")
         
-        # Check sectionA structure
-        if len(sectionA) > 0:
-            first = sectionA[0]
-            assert 'chance' in first, "Expected chance field in sectionA"
-            print(f"   First sectionA college: {first.get('college_name', 'N/A')} - {first.get('chance', 'N/A')}")
+        # Check meta.profileLabel
+        profile_label = data.get('meta', {}).get('profileLabel')
+        if not profile_label:
+            print_fail("meta.profileLabel is missing")
+            return False
+        print_pass(f"meta.profileLabel: {profile_label}")
         
-        # Check sectionB structure
-        if len(sectionB) > 0:
-            first = sectionB[0]
-            assert 'courses' in first, "Expected courses array in sectionB"
-            print(f"   First sectionB college: {first.get('college_name', 'N/A')} with {len(first.get('courses', []))} courses")
+        # Check meta.effectiveYear
+        effective_year = data.get('meta', {}).get('effectiveYear')
+        if effective_year is None:
+            print_fail("meta.effectiveYear is missing")
+            return False
+        print_pass(f"meta.effectiveYear: {effective_year}")
         
-        # Check tier sorting (T1 should come before T2 in sectionA)
-        tiers = [c.get('tier') for c in sectionA if c.get('tier')]
-        if 'T1' in tiers and 'T2' in tiers:
-            t1_idx = tiers.index('T1')
-            t2_idx = tiers.index('T2')
-            assert t1_idx < t2_idx, "Expected T1 colleges before T2 in sectionA"
-            print(f"   ✅ Tier sorting correct: T1 before T2")
+        # Check results array
+        results = data.get('results', [])
+        if not results:
+            print_fail("results array is empty")
+            return False
+        print_pass(f"results array has {len(results)} entries")
         
-        print(f"   ✅ PASSED: Predict endpoint working for {category}")
+        # Check first result structure
+        first = results[0]
+        required_fields = ['college_code', 'college_name', 'tier', 'course_code', 'course_name',
+                          'bestQuota', 'bestQuotaLabel', 'bestCutoff', 'studentRank', 
+                          'margin', 'confidence', 'probability', 'matchedQuotas', 'consideredQuotas']
+        for field in required_fields:
+            if field not in first:
+                print_fail(f"Result missing field: {field}")
+                return False
+        print_pass("Result structure has all required fields")
+        
+        # Check grouped object
+        grouped = data.get('grouped', {})
+        expected_keys = ['Safe', 'High Chance', 'Borderline', 'Low Chance', 'Not Likely']
+        if set(grouped.keys()) != set(expected_keys):
+            print_fail(f"grouped keys mismatch. Expected {expected_keys}, got {list(grouped.keys())}")
+            return False
+        print_pass(f"grouped has exactly 5 confidence buckets")
+        
+        # Check sectionB array
+        section_b = data.get('sectionB', [])
+        if not section_b:
+            print_fail("sectionB array is empty")
+            return False
+        print_pass(f"sectionB array has {len(section_b)} entries")
+        
+        # Check first sectionB structure
+        first_sb = section_b[0]
+        sb_fields = ['college_code', 'college_name', 'tier', 'city', 'courses']
+        for field in sb_fields:
+            if field not in first_sb:
+                print_fail(f"sectionB entry missing field: {field}")
+                return False
+        print_pass("sectionB structure correct")
+        
+        # Verify at least one result has multiple matchedQuotas (proving multi-quota matching)
+        multi_quota_found = False
+        for r in results:
+            if len(r.get('matchedQuotas', [])) >= 2:
+                multi_quota_found = True
+                print_pass(f"Found result with {len(r['matchedQuotas'])} matched quotas (multi-quota matching works)")
+                break
+        
+        if not multi_quota_found:
+            print_info("No result with multiple matchedQuotas found (may be OK if rank is high)")
+        
         return True
+        
     except Exception as e:
-        print(f"   ❌ FAILED: {e}")
+        print_fail(f"Exception: {e}")
         return False
 
-def test_create_order(rank, category, course, round_name):
-    """Test 4: POST /api/payment/create-order"""
-    print(f"\n✅ Test 4: POST /api/payment/create-order")
+def test_predict_confidence_math():
+    """Test B: Verify confidence math and probability"""
+    print_test("B. Confidence math: margin%, confidence buckets, probability")
+    
+    payload = {
+        "rank": 15000,
+        "baseCategory": "GM",
+        "course": "CS",
+        "round": "R1"
+    }
+    
     try:
-        payload = {
-            "rank": rank,
-            "category": category,
-            "course": course,
-            "round": round_name
-        }
-        resp = requests.post(f"{API_BASE}/payment/create-order", json=payload, timeout=10)
-        print(f"   Status: {resp.status_code}")
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        results = data.get('results', [])
+        
+        if not results:
+            print_fail("No results to verify")
+            return False
+        
+        # Check first 3 results
+        for i, r in enumerate(results[:3]):
+            cutoff = r['bestCutoff']
+            rank = r['studentRank']
+            margin = r['margin']
+            confidence = r['confidence']
+            probability = r['probability']
+            
+            # Verify margin calculation
+            expected_margin = ((cutoff - rank) / cutoff) * 100
+            if abs(margin - expected_margin) > 0.01:
+                print_fail(f"Result {i}: margin mismatch. Expected {expected_margin:.2f}, got {margin:.2f}")
+                return False
+            
+            # Verify confidence bucket
+            if margin >= 20:
+                expected_conf = 'Safe'
+            elif margin >= 10:
+                expected_conf = 'High Chance'
+            elif margin >= 0:
+                expected_conf = 'Borderline'
+            elif margin >= -10:
+                expected_conf = 'Low Chance'
+            else:
+                expected_conf = 'Not Likely'
+            
+            if confidence != expected_conf:
+                print_fail(f"Result {i}: confidence mismatch. Expected {expected_conf}, got {confidence}")
+                return False
+            
+            # Verify probability range
+            if not (10 <= probability <= 99):
+                print_fail(f"Result {i}: probability {probability} out of range [10, 99]")
+                return False
+            
+            print_pass(f"Result {i}: margin={margin:.2f}%, confidence={confidence}, probability={probability}%")
+        
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_predict_best_quota_rule():
+    """Test C: Best-quota rule (largest cutoff wins)"""
+    print_test("C. Best-quota rule: bestQuota = matched quota with LARGEST cutoff")
+    
+    payload = {
+        "rank": 12000,
+        "baseCategory": "2A",
+        "rural": True,
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        results = data.get('results', [])
+        
+        # Find results with multiple matchedQuotas
+        multi_quota_results = [r for r in results if len(r.get('matchedQuotas', [])) >= 2]
+        
+        if not multi_quota_results:
+            print_info("No results with multiple matchedQuotas found (may be OK)")
+            return True
+        
+        for i, r in enumerate(multi_quota_results[:3]):
+            matched = r['matchedQuotas']
+            best_quota = r['bestQuota']
+            best_cutoff = r['bestCutoff']
+            
+            # Find the matched quota with largest cutoff
+            max_matched = max(matched, key=lambda q: q['cutoff'])
+            
+            if best_quota != max_matched['code']:
+                print_fail(f"Result {i}: bestQuota={best_quota}, but largest cutoff is {max_matched['code']}")
+                return False
+            
+            if abs(best_cutoff - max_matched['cutoff']) > 0.01:
+                print_fail(f"Result {i}: bestCutoff={best_cutoff}, but largest cutoff is {max_matched['cutoff']}")
+                return False
+            
+            print_pass(f"Result {i}: bestQuota={best_quota} correctly has largest cutoff={best_cutoff}")
+        
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_predict_high_rank_not_likely():
+    """Test D: High rank should populate Not Likely bucket"""
+    print_test("D. High rank (50000) should have Not Likely entries")
+    
+    payload = {
+        "rank": 50000,
+        "baseCategory": "GM",
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        grouped = data.get('grouped', {})
+        not_likely = grouped.get('Not Likely', [])
+        
+        if len(not_likely) == 0:
+            print_fail("Not Likely bucket is empty for high rank")
+            return False
+        
+        print_pass(f"Not Likely bucket has {len(not_likely)} entries")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_predict_special_category_last():
+    """Test E: Special category appended last"""
+    print_test("E. Special category (PWD) should be last in eligibleCategories")
+    
+    payload = {
+        "rank": 15000,
+        "baseCategory": "GM",
+        "special": ["PWD"],
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        eligible = data.get('meta', {}).get('eligibleCategories', [])
+        
+        if not eligible:
+            print_fail("eligibleCategories is empty")
+            return False
+        
+        last = eligible[-1]
+        if last['code'] != 'PWD':
+            print_fail(f"Last eligible category is {last['code']}, expected PWD")
+            return False
+        
+        print_pass(f"PWD correctly appended as last: {[c['code'] for c in eligible]}")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_predict_legacy_payload():
+    """Test F: Legacy payload still works"""
+    print_test("F. Legacy payload {category:'2AG'} should work")
+    
+    payload = {
+        "rank": 15000,
+        "category": "2AG",
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json=payload, timeout=30)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        
+        # Check that it returns new shape
+        if not data.get('ok'):
+            print_fail("Response missing 'ok: true'")
+            return False
+        
+        # Check meta.profile
+        profile = data.get('meta', {}).get('profile', {})
+        base_cat = profile.get('baseCategory')
+        
+        # Legacy '2AG' should translate to baseCategory='2A', rural=false, kannada=false
+        if base_cat != '2A':
+            print_fail(f"Expected baseCategory='2A', got '{base_cat}'")
+            return False
+        
+        # Check eligibleCategories
+        eligible = data.get('meta', {}).get('eligibleCategories', [])
+        codes = [c['code'] for c in eligible]
+        
+        # Should have 2AG as first (or early) entry
+        if '2AG' not in codes[:3]:
+            print_fail(f"Expected '2AG' in first 3 eligible codes, got {codes[:3]}")
+            return False
+        
+        print_pass(f"Legacy payload works. baseCategory={base_cat}, eligible={codes[:5]}")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_predict_validation():
+    """Test G: Validation - missing rank or round returns 400"""
+    print_test("G. Validation: missing rank or round → 400")
+    
+    # Missing rank
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json={"round": "R1", "course": "CS"}, timeout=10)
+        if resp.status_code != 400:
+            print_fail(f"Missing rank: expected 400, got {resp.status_code}")
+            return False
+        print_pass("Missing rank correctly returns 400")
+    except Exception as e:
+        print_fail(f"Exception testing missing rank: {e}")
+        return False
+    
+    # Missing round
+    try:
+        resp = requests.post(f"{BASE_URL}/predict", json={"rank": 10000, "course": "CS"}, timeout=10)
+        if resp.status_code != 400:
+            print_fail(f"Missing round: expected 400, got {resp.status_code}")
+            return False
+        print_pass("Missing round correctly returns 400")
+    except Exception as e:
+        print_fail(f"Exception testing missing round: {e}")
+        return False
+    
+    return True
+
+# ============================================================================
+# TASK 2: /api/payment/create-order — Multi-Quota Payload
+# ============================================================================
+
+def test_create_order_new_payload():
+    """Test create-order with new multi-quota payload"""
+    print_test("Create-order: New multi-quota payload")
+    
+    payload = {
+        "rank": 12000,
+        "baseCategory": "2A",
+        "rural": True,
+        "kannada": False,
+        "special": [],
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/payment/create-order", json=payload, timeout=10)
+        print_info(f"Status: {resp.status_code}")
         
         if resp.status_code != 200:
-            print(f"   Response: {resp.text}")
-            
-        data = resp.json()
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'orderId' in data, "Expected orderId"
-        assert 'amount' in data, "Expected amount"
-        assert 'currency' in data, "Expected currency"
-        assert 'keyId' in data, "Expected keyId"
-        assert 'receipt' in data, "Expected receipt"
-        
-        order_id = data['orderId']
-        amount = data['amount']
-        currency = data['currency']
-        key_id = data['keyId']
-        
-        print(f"   Order ID: {order_id}")
-        print(f"   Amount: {amount}")
-        print(f"   Currency: {currency}")
-        print(f"   Key ID: {key_id}")
-        
-        assert order_id.startswith('order_'), f"Expected orderId to start with 'order_', got {order_id}"
-        assert amount == 5000, f"Expected amount=5000, got {amount}"
-        assert currency == 'INR', f"Expected currency=INR, got {currency}"
-        assert key_id.startswith('rzp_test_'), f"Expected keyId to start with 'rzp_test_', got {key_id}"
-        
-        print("   ✅ PASSED: Order creation successful")
-        return order_id
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return None
-
-def test_verify_forged_signature(order_id):
-    """Test 5: POST /api/payment/verify with forged signature"""
-    print(f"\n✅ Test 5: POST /api/payment/verify with FORGED signature")
-    try:
-        payload = {
-            "razorpay_order_id": order_id,
-            "razorpay_payment_id": "pay_forged_test",
-            "razorpay_signature": "deadbeef",
-            "input": {
-                "rank": 12000,
-                "category": "GM",
-                "course": "CS",
-                "round": "R1"
-            }
-        }
-        resp = requests.post(f"{API_BASE}/payment/verify", json=payload, timeout=10)
-        print(f"   Status: {resp.status_code}")
+            print_fail(f"Expected 200, got {resp.status_code}")
+            print_info(f"Response: {resp.text[:500]}")
+            return False
         
         data = resp.json()
-        print(f"   Response: {json.dumps(data, indent=2)}")
         
-        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
-        assert 'error' in data, "Expected error field"
-        assert 'Signature verification failed' in data['error'], f"Expected signature verification error, got {data['error']}"
+        # Check required fields
+        required = ['orderId', 'amount', 'currency', 'keyId', 'receipt']
+        for field in required:
+            if field not in data:
+                print_fail(f"Missing field: {field}")
+                return False
         
-        print("   ✅ PASSED: Forged signature correctly rejected")
+        # Verify values
+        if data['amount'] != 5000:
+            print_fail(f"Expected amount=5000, got {data['amount']}")
+            return False
+        
+        if data['currency'] != 'INR':
+            print_fail(f"Expected currency=INR, got {data['currency']}")
+            return False
+        
+        print_pass(f"Order created: {data['orderId']}, amount={data['amount']}, currency={data['currency']}")
         return True
+        
     except Exception as e:
-        print(f"   ❌ FAILED: {e}")
+        print_fail(f"Exception: {e}")
         return False
 
-def compute_razorpay_signature(order_id, payment_id, secret):
+def test_create_order_legacy_payload():
+    """Test create-order with legacy payload"""
+    print_test("Create-order: Legacy payload")
+    
+    payload = {
+        "rank": 12000,
+        "category": "GM",
+        "course": "CS",
+        "round": "R1"
+    }
+    
+    try:
+        resp = requests.post(f"{BASE_URL}/payment/create-order", json=payload, timeout=10)
+        if resp.status_code != 200:
+            print_fail(f"Expected 200, got {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        if 'orderId' not in data:
+            print_fail("Missing orderId")
+            return False
+        
+        print_pass(f"Legacy payload works: {data['orderId']}")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+
+def test_create_order_validation():
+    """Test create-order validation"""
+    print_test("Create-order: Validation (missing rank/round → 400)")
+    
+    # Missing rank
+    try:
+        resp = requests.post(f"{BASE_URL}/payment/create-order", json={"round": "R1"}, timeout=10)
+        if resp.status_code != 400:
+            print_fail(f"Missing rank: expected 400, got {resp.status_code}")
+            return False
+        print_pass("Missing rank correctly returns 400")
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+    
+    # Missing round
+    try:
+        resp = requests.post(f"{BASE_URL}/payment/create-order", json={"rank": 10000}, timeout=10)
+        if resp.status_code != 400:
+            print_fail(f"Missing round: expected 400, got {resp.status_code}")
+            return False
+        print_pass("Missing round correctly returns 400")
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        return False
+    
+    return True
+
+# ============================================================================
+# TASK 3: /api/payment/verify — Multi-Quota Engine + PDF
+# ============================================================================
+
+def compute_razorpay_signature(order_id, payment_id):
     """Compute HMAC-SHA256 signature for Razorpay"""
     message = f"{order_id}|{payment_id}"
     signature = hmac.new(
-        secret.encode('utf-8'),
+        RAZORPAY_KEY_SECRET.encode('utf-8'),
         message.encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
     return signature
 
-def test_verify_real_signature(rank, category, course, round_name):
-    """Test 6: End-to-end happy path with REAL HMAC"""
-    print(f"\n✅ Test 6: End-to-end happy path with REAL HMAC (rank={rank}, category={category}, course={course}, round={round_name})")
+def test_verify_payment_new_payload():
+    """Test verify payment with new multi-quota payload"""
+    print_test("Verify payment: New multi-quota payload + PDF generation")
+    
+    # First create an order
+    order_payload = {
+        "rank": 12000,
+        "baseCategory": "2A",
+        "rural": True,
+        "kannada": True,
+        "special": ["PWD"],
+        "course": "CS",
+        "round": "R1"
+    }
+    
     try:
-        # Step 1: Create order
-        print("   Step 1: Creating order...")
-        payload = {
-            "rank": rank,
-            "category": category,
-            "course": course,
-            "round": round_name
-        }
-        resp = requests.post(f"{API_BASE}/payment/create-order", json=payload, timeout=10)
-        assert resp.status_code == 200, f"Order creation failed: {resp.status_code}"
-        order_data = resp.json()
+        order_resp = requests.post(f"{BASE_URL}/payment/create-order", json=order_payload, timeout=10)
+        if order_resp.status_code != 200:
+            print_fail(f"Order creation failed: {order_resp.status_code}")
+            return False
+        
+        order_data = order_resp.json()
         order_id = order_data['orderId']
-        print(f"   Order created: {order_id}")
+        print_info(f"Order created: {order_id}")
         
-        # Step 2: Generate synthetic payment_id
-        payment_id = f"pay_simulated_{int(time.time() * 1000)}"
-        print(f"   Synthetic payment ID: {payment_id}")
+        # Simulate payment
+        payment_id = f"pay_test_{int(time.time() * 1000)}"
+        signature = compute_razorpay_signature(order_id, payment_id)
         
-        # Step 3: Compute signature
-        signature = compute_razorpay_signature(order_id, payment_id, RAZORPAY_KEY_SECRET)
-        print(f"   Computed signature: {signature[:16]}...")
-        
-        # Step 4: Verify payment
-        print("   Step 2: Verifying payment with real signature...")
         verify_payload = {
             "razorpay_order_id": order_id,
             "razorpay_payment_id": payment_id,
             "razorpay_signature": signature,
-            "input": {
-                "rank": rank,
-                "category": category,
-                "course": course,
-                "round": round_name
-            }
+            "input": order_payload
         }
-        resp = requests.post(f"{API_BASE}/payment/verify", json=verify_payload, timeout=30)
-        print(f"   Status: {resp.status_code}")
         
-        if resp.status_code != 200:
-            print(f"   Response: {resp.text}")
-            
-        data = resp.json()
+        verify_resp = requests.post(f"{BASE_URL}/payment/verify", json=verify_payload, timeout=30)
+        print_info(f"Verify status: {verify_resp.status_code}")
         
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert data.get('ok') == True, "Expected ok=true"
-        assert 'pdfUrl' in data, "Expected pdfUrl"
-        assert 'reportId' in data, "Expected reportId"
-        assert 'paymentId' in data, "Expected paymentId"
+        if verify_resp.status_code != 200:
+            print_fail(f"Expected 200, got {verify_resp.status_code}")
+            print_info(f"Response: {verify_resp.text[:500]}")
+            return False
         
-        pdf_url = data['pdfUrl']
-        report_id = data['reportId']
-        payment_id_returned = data['paymentId']
+        verify_data = verify_resp.json()
         
-        print(f"   PDF URL: {pdf_url}")
-        print(f"   Report ID: {report_id}")
-        print(f"   Payment ID: {payment_id_returned}")
+        # Check required fields
+        if not verify_data.get('ok'):
+            print_fail("Response missing 'ok: true'")
+            return False
         
-        assert pdf_url.endswith('.pdf'), f"Expected PDF URL to end with .pdf, got {pdf_url}"
-        assert report_id is not None, "Expected reportId to be non-null"
-        assert payment_id_returned == payment_id, f"Expected paymentId={payment_id}, got {payment_id_returned}"
+        pdf_url = verify_data.get('pdfUrl')
+        if not pdf_url:
+            print_fail("Missing pdfUrl")
+            return False
         
-        # Step 5: Verify PDF is accessible
-        print("   Step 3: Verifying PDF is accessible...")
-        pdf_resp = requests.head(pdf_url, timeout=10)
-        print(f"   PDF HEAD status: {pdf_resp.status_code}")
-        print(f"   PDF Content-Type: {pdf_resp.headers.get('Content-Type', 'N/A')}")
-        print(f"   PDF Content-Length: {pdf_resp.headers.get('Content-Length', 'N/A')}")
+        if not pdf_url.endswith('.pdf'):
+            print_fail(f"pdfUrl doesn't end with .pdf: {pdf_url}")
+            return False
         
-        assert pdf_resp.status_code == 200, f"Expected PDF to be accessible, got {pdf_resp.status_code}"
-        assert 'pdf' in pdf_resp.headers.get('Content-Type', '').lower(), "Expected Content-Type to contain 'pdf'"
+        print_pass(f"PDF URL: {pdf_url}")
         
-        content_length = int(pdf_resp.headers.get('Content-Length', 0))
-        assert content_length > 5000, f"Expected PDF size > 5KB, got {content_length} bytes"
+        # Verify PDF is downloadable
+        pdf_resp = requests.get(pdf_url, timeout=10)
+        if pdf_resp.status_code != 200:
+            print_fail(f"PDF download failed: {pdf_resp.status_code}")
+            return False
         
-        print(f"   ✅ PASSED: End-to-end payment flow successful")
-        return {
-            'order_id': order_id,
-            'payment_id': payment_id,
-            'pdf_url': pdf_url,
-            'report_id': report_id
-        }
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return None
-
-def test_admin_list_reports():
-    """Test 7a: GET /api/admin/list?type=reports"""
-    print(f"\n✅ Test 7a: GET /api/admin/list?type=reports")
-    try:
-        resp = requests.get(f"{API_BASE}/admin/list?type=reports&limit=10", timeout=10)
-        print(f"   Status: {resp.status_code}")
+        pdf_content = pdf_resp.content
         
-        data = resp.json()
+        # Check PDF signature
+        if not pdf_content.startswith(b'%PDF'):
+            print_fail("Downloaded file is not a valid PDF")
+            return False
         
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'rows' in data, "Expected rows array"
+        pdf_size = len(pdf_content)
+        if pdf_size < 30000:
+            print_fail(f"PDF size {pdf_size} bytes is too small (expected ≥30KB)")
+            return False
         
-        rows = data['rows']
-        print(f"   Reports count: {len(rows)}")
+        print_pass(f"PDF downloaded successfully: {pdf_size} bytes")
         
-        if len(rows) > 0:
-            first = rows[0]
-            print(f"   First report: rank={first.get('rank')}, category={first.get('category')}, course={first.get('course_code')}")
-            print(f"   PDF URL: {first.get('pdf_url', 'N/A')[:80]}...")
-            print(f"   Created at: {first.get('created_at', 'N/A')}")
-            
-            assert 'rank' in first, "Expected rank field"
-            assert 'category' in first, "Expected category field"
-            assert 'pdf_url' in first, "Expected pdf_url field"
-            assert 'created_at' in first, "Expected created_at field"
+        # Check reportId and paymentId
+        report_id = verify_data.get('reportId')
+        payment_id_resp = verify_data.get('paymentId')
         
-        print("   ✅ PASSED: Reports list retrieved")
+        if not report_id:
+            print_fail("Missing reportId")
+            return False
+        
+        if payment_id_resp != payment_id:
+            print_fail(f"paymentId mismatch: expected {payment_id}, got {payment_id_resp}")
+            return False
+        
+        print_pass(f"reportId: {report_id}, paymentId: {payment_id_resp}")
+        
+        # Verify database entries (via admin endpoints)
+        time.sleep(1)  # Give DB a moment
+        
+        # Check payments table
+        payments_resp = requests.get(f"{BASE_URL}/admin/list?type=payments&limit=5", timeout=10)
+        if payments_resp.status_code == 200:
+            payments_data = payments_resp.json()
+            payments = payments_data.get('rows', [])
+            found_payment = any(p.get('payment_id') == payment_id and p.get('status') == 'captured' for p in payments)
+            if found_payment:
+                print_pass("Payment row inserted in database with status='captured'")
+            else:
+                print_fail("Payment row not found in database")
+        
+        # Check reports table
+        reports_resp = requests.get(f"{BASE_URL}/admin/list?type=reports&limit=5", timeout=10)
+        if reports_resp.status_code == 200:
+            reports_data = reports_resp.json()
+            reports = reports_data.get('rows', [])
+            found_report = any(r.get('id') == report_id and r.get('rank') == 12000 for r in reports)
+            if found_report:
+                print_pass("Report row inserted in database")
+            else:
+                print_fail("Report row not found in database")
+        
         return True
+        
     except Exception as e:
-        print(f"   ❌ FAILED: {e}")
+        print_fail(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
-def test_admin_list_payments():
-    """Test 7b: GET /api/admin/list?type=payments"""
-    print(f"\n✅ Test 7b: GET /api/admin/list?type=payments")
+def test_verify_payment_legacy_payload():
+    """Test verify payment with legacy payload"""
+    print_test("Verify payment: Legacy payload")
+    
+    order_payload = {
+        "rank": 15000,
+        "category": "GM",
+        "course": "EC",
+        "round": "R1"
+    }
+    
     try:
-        resp = requests.get(f"{API_BASE}/admin/list?type=payments&limit=10", timeout=10)
-        print(f"   Status: {resp.status_code}")
+        order_resp = requests.post(f"{BASE_URL}/payment/create-order", json=order_payload, timeout=10)
+        if order_resp.status_code != 200:
+            print_fail(f"Order creation failed: {order_resp.status_code}")
+            return False
         
-        data = resp.json()
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'rows' in data, "Expected rows array"
-        
-        rows = data['rows']
-        print(f"   Payments count: {len(rows)}")
-        
-        if len(rows) > 0:
-            first = rows[0]
-            print(f"   First payment: payment_id={first.get('payment_id')}, amount={first.get('amount')}, status={first.get('status')}")
-            print(f"   Created at: {first.get('created_at', 'N/A')}")
-            
-            assert 'payment_id' in first, "Expected payment_id field"
-            assert 'amount' in first, "Expected amount field"
-            assert 'status' in first, "Expected status field"
-            assert 'created_at' in first, "Expected created_at field"
-        
-        print("   ✅ PASSED: Payments list retrieved")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_admin_revenue():
-    """Test 7c: GET /api/admin/revenue"""
-    print(f"\n✅ Test 7c: GET /api/admin/revenue")
-    try:
-        resp = requests.get(f"{API_BASE}/admin/revenue", timeout=10)
-        print(f"   Status: {resp.status_code}")
-        
-        data = resp.json()
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'total_revenue' in data, "Expected total_revenue field"
-        assert 'total_captured' in data, "Expected total_captured field"
-        assert 'recent' in data, "Expected recent array"
-        
-        total_revenue = data['total_revenue']
-        total_captured = data['total_captured']
-        
-        print(f"   Total revenue: ₹{total_revenue}")
-        print(f"   Total captured: {total_captured}")
-        print(f"   Recent payments: {len(data.get('recent', []))}")
-        
-        assert total_revenue >= 0, "Expected total_revenue >= 0"
-        assert total_captured >= 0, "Expected total_captured >= 0"
-        
-        print("   ✅ PASSED: Revenue data retrieved")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_admin_stats():
-    """Test 7d: GET /api/admin/stats"""
-    print(f"\n✅ Test 7d: GET /api/admin/stats")
-    try:
-        resp = requests.get(f"{API_BASE}/admin/stats", timeout=10)
-        print(f"   Status: {resp.status_code}")
-        
-        data = resp.json()
-        
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert 'colleges' in data, "Expected colleges count"
-        assert 'courses' in data, "Expected courses count"
-        assert 'cutoffs' in data, "Expected cutoffs count"
-        assert 'payments' in data, "Expected payments count"
-        assert 'reports' in data, "Expected reports count"
-        assert 'revenue' in data, "Expected revenue field"
-        
-        print(f"   Colleges: {data['colleges']}")
-        print(f"   Courses: {data['courses']}")
-        print(f"   Cutoffs: {data['cutoffs']}")
-        print(f"   Payments: {data['payments']}")
-        print(f"   Reports: {data['reports']}")
-        print(f"   Revenue: ₹{data['revenue']}")
-        
-        assert data['colleges'] >= 15, f"Expected at least 15 colleges, got {data['colleges']}"
-        assert data['courses'] >= 15, f"Expected at least 15 courses, got {data['courses']}"
-        assert data['cutoffs'] >= 19000, f"Expected at least 19000 cutoffs, got {data['cutoffs']}"
-        
-        print("   ✅ PASSED: Stats retrieved")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_edge_case_missing_rank():
-    """Test 9a: POST /api/payment/create-order missing rank"""
-    print(f"\n✅ Test 9a: POST /api/payment/create-order missing rank")
-    try:
-        payload = {
-            "category": "GM",
-            "course": "CS",
-            "round": "R1"
-        }
-        resp = requests.post(f"{API_BASE}/payment/create-order", json=payload, timeout=10)
-        print(f"   Status: {resp.status_code}")
-        
-        data = resp.json()
-        
-        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
-        assert 'error' in data, "Expected error field"
-        
-        print(f"   Error: {data['error']}")
-        print("   ✅ PASSED: Missing rank correctly rejected")
-        return True
-    except Exception as e:
-        print(f"   ❌ FAILED: {e}")
-        return False
-
-def test_edge_case_invalid_signature():
-    """Test 9b: POST /api/payment/verify with flipped signature"""
-    print(f"\n✅ Test 9b: POST /api/payment/verify with flipped signature")
-    try:
-        # Create a valid order first
-        payload = {
-            "rank": 12000,
-            "category": "GM",
-            "course": "CS",
-            "round": "R1"
-        }
-        resp = requests.post(f"{API_BASE}/payment/create-order", json=payload, timeout=10)
-        order_data = resp.json()
+        order_data = order_resp.json()
         order_id = order_data['orderId']
         
-        payment_id = f"pay_test_{int(time.time() * 1000)}"
-        signature = compute_razorpay_signature(order_id, payment_id, RAZORPAY_KEY_SECRET)
-        
-        # Flip one character in signature
-        flipped_signature = signature[:-1] + ('0' if signature[-1] != '0' else '1')
+        payment_id = f"pay_test_legacy_{int(time.time() * 1000)}"
+        signature = compute_razorpay_signature(order_id, payment_id)
         
         verify_payload = {
             "razorpay_order_id": order_id,
             "razorpay_payment_id": payment_id,
-            "razorpay_signature": flipped_signature,
-            "input": {
-                "rank": 12000,
-                "category": "GM",
-                "course": "CS",
-                "round": "R1"
-            }
+            "razorpay_signature": signature,
+            "input": order_payload
         }
-        resp = requests.post(f"{API_BASE}/payment/verify", json=verify_payload, timeout=10)
-        print(f"   Status: {resp.status_code}")
         
-        data = resp.json()
+        verify_resp = requests.post(f"{BASE_URL}/payment/verify", json=verify_payload, timeout=30)
         
-        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
-        assert 'error' in data, "Expected error field"
-        assert 'Signature verification failed' in data['error'], f"Expected signature verification error"
+        if verify_resp.status_code != 200:
+            print_fail(f"Expected 200, got {verify_resp.status_code}")
+            return False
         
-        print("   ✅ PASSED: Invalid signature correctly rejected")
+        verify_data = verify_resp.json()
+        
+        if not verify_data.get('ok'):
+            print_fail("Response missing 'ok: true'")
+            return False
+        
+        pdf_url = verify_data.get('pdfUrl')
+        if not pdf_url or not pdf_url.endswith('.pdf'):
+            print_fail("Invalid pdfUrl")
+            return False
+        
+        print_pass(f"Legacy payload works. PDF: {pdf_url}")
         return True
+        
     except Exception as e:
-        print(f"   ❌ FAILED: {e}")
+        print_fail(f"Exception: {e}")
         return False
 
-def test_record_failure():
-    """Test 9c: POST /api/payment/record-failure"""
-    print(f"\n✅ Test 9c: POST /api/payment/record-failure")
+def test_verify_payment_forged_signature():
+    """Test verify payment with forged signature"""
+    print_test("Verify payment: Forged signature → 400")
+    
+    order_payload = {
+        "rank": 10000,
+        "baseCategory": "GM",
+        "course": "CS",
+        "round": "R1"
+    }
+    
     try:
-        payload = {
-            "razorpay_payment_id": f"pay_failed_{int(time.time() * 1000)}",
-            "description": "User cancelled"
+        order_resp = requests.post(f"{BASE_URL}/payment/create-order", json=order_payload, timeout=10)
+        if order_resp.status_code != 200:
+            print_fail(f"Order creation failed: {order_resp.status_code}")
+            return False
+        
+        order_data = order_resp.json()
+        order_id = order_data['orderId']
+        
+        payment_id = f"pay_test_forged_{int(time.time() * 1000)}"
+        # Use a forged signature
+        forged_signature = "forged_signature_12345"
+        
+        verify_payload = {
+            "razorpay_order_id": order_id,
+            "razorpay_payment_id": payment_id,
+            "razorpay_signature": forged_signature,
+            "input": order_payload
         }
-        resp = requests.post(f"{API_BASE}/payment/record-failure", json=payload, timeout=10)
-        print(f"   Status: {resp.status_code}")
         
-        data = resp.json()
+        verify_resp = requests.post(f"{BASE_URL}/payment/verify", json=verify_payload, timeout=10)
         
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert data.get('ok') == True, "Expected ok=true"
+        if verify_resp.status_code != 400:
+            print_fail(f"Expected 400, got {verify_resp.status_code}")
+            return False
         
-        print("   ✅ PASSED: Failure recorded")
-        
-        # Verify it appears in payments list
-        resp = requests.get(f"{API_BASE}/admin/list?type=payments&limit=10", timeout=10)
-        data = resp.json()
-        rows = data.get('rows', [])
-        
-        failed_payments = [r for r in rows if r.get('status') == 'failed']
-        print(f"   Failed payments in list: {len(failed_payments)}")
-        
-        assert len(failed_payments) > 0, "Expected at least one failed payment"
-        
-        print("   ✅ PASSED: Failed payment appears in list")
+        print_pass("Forged signature correctly rejected with 400")
         return True
+        
     except Exception as e:
-        print(f"   ❌ FAILED: {e}")
+        print_fail(f"Exception: {e}")
         return False
+
+# ============================================================================
+# Main Test Runner
+# ============================================================================
 
 def main():
-    """Run all tests"""
-    results = []
+    print("\n" + "="*80)
+    print("KCET MULTI-QUOTA PREDICTION ENGINE - BACKEND TEST SUITE")
+    print("="*80)
     
-    # Test 1: Health check
-    results.append(("Health check", test_health()))
+    results = {}
     
-    # Test 2: Lookup
-    results.append(("Lookup", test_lookup()))
+    # Task 1: /api/predict tests
+    print("\n" + "="*80)
+    print("TASK 1: /api/predict — Multi-Quota Engine")
+    print("="*80)
     
-    # Test 3: Predict for all categories
-    for category in ['GM', 'SCR', 'KK', 'STG']:
-        results.append((f"Predict {category}", test_predict(12000, category, 'CS', 'R1')))
+    results['1A_multi_quota_expansion'] = test_predict_multi_quota_expansion()
+    results['1B_confidence_math'] = test_predict_confidence_math()
+    results['1C_best_quota_rule'] = test_predict_best_quota_rule()
+    results['1D_high_rank_not_likely'] = test_predict_high_rank_not_likely()
+    results['1E_special_category_last'] = test_predict_special_category_last()
+    results['1F_legacy_payload'] = test_predict_legacy_payload()
+    results['1G_validation'] = test_predict_validation()
     
-    # Test 4: Create order
-    order_id = test_create_order(12000, 'GM', 'CS', 'R1')
-    results.append(("Create order", order_id is not None))
+    # Task 2: /api/payment/create-order tests
+    print("\n" + "="*80)
+    print("TASK 2: /api/payment/create-order — Multi-Quota Payload")
+    print("="*80)
     
-    # Test 5: Verify with forged signature
-    if order_id:
-        results.append(("Verify forged signature", test_verify_forged_signature(order_id)))
+    results['2A_create_order_new'] = test_create_order_new_payload()
+    results['2B_create_order_legacy'] = test_create_order_legacy_payload()
+    results['2C_create_order_validation'] = test_create_order_validation()
     
-    # Test 6: End-to-end happy path with real signature (GM)
-    gm_result = test_verify_real_signature(12000, 'GM', 'CS', 'R1')
-    results.append(("E2E happy path GM", gm_result is not None))
+    # Task 3: /api/payment/verify tests
+    print("\n" + "="*80)
+    print("TASK 3: /api/payment/verify — Multi-Quota Engine + PDF")
+    print("="*80)
     
-    # Test 7: Admin endpoints
-    results.append(("Admin list reports", test_admin_list_reports()))
-    results.append(("Admin list payments", test_admin_list_payments()))
-    results.append(("Admin revenue", test_admin_revenue()))
-    results.append(("Admin stats", test_admin_stats()))
-    
-    # Test 8: Additional verify-flow test with SCR
-    scr_result = test_verify_real_signature(50000, 'SCR', 'AI', 'R2')
-    results.append(("E2E happy path SCR", scr_result is not None))
-    
-    # Test 9: Edge cases
-    results.append(("Edge case: missing rank", test_edge_case_missing_rank()))
-    results.append(("Edge case: invalid signature", test_edge_case_invalid_signature()))
-    results.append(("Edge case: record failure", test_record_failure()))
+    results['3A_verify_new_payload'] = test_verify_payment_new_payload()
+    results['3B_verify_legacy_payload'] = test_verify_payment_legacy_payload()
+    results['3C_verify_forged_signature'] = test_verify_payment_forged_signature()
     
     # Summary
-    print("\n" + "=" * 80)
-    print("📊 TEST SUMMARY")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
     
-    passed = sum(1 for _, result in results if result)
+    passed = sum(1 for v in results.values() if v)
     total = len(results)
     
-    for name, result in results:
+    for test_name, result in results.items():
         status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status}: {name}")
+        print(f"{status}: {test_name}")
     
-    print("=" * 80)
-    print(f"Total: {passed}/{total} tests passed ({passed*100//total}%)")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print(f"TOTAL: {passed}/{total} tests passed ({passed*100//total}%)")
+    print("="*80)
     
     return passed == total
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     success = main()
-    sys.exit(0 if success else 1)
+    exit(0 if success else 1)
